@@ -38,7 +38,7 @@
 - [ ] 重新测试 dm-verity、ZFS、WireGuard、TDX guest module (`tdx-guest.bb`) 在新 toolchain 下的构建与运行。
 
 ## 7. 构建与验证
-- [ ] 新建 `build-walnascar` 构建目录，运行 `bitbake-layers show-layers` 校验兼容性检查。
+- [x] 新建独立构建目录，运行 `bitbake-layers show-layers` 校验兼容性检查。
 - [ ] 全量编译 `dstack-rootfs`、`dstack-initramfs`、`cvm-initramfs`，比对 `tmp/deploy/images` 与 `kernel-config`。
 - [ ] 执行 `oe-selftest`（virtualization、security）和 DStack 自有 CI：TDX 启动、Docker/Container runtime、dm-verity、ZFS 功能验证。
 - [ ] 更新文档、脚本（`README.md`、`build.sh` 等）和 CI 步骤，说明新的 Yocto 版本与宿主要求。
