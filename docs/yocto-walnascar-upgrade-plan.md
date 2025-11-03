@@ -22,7 +22,7 @@
 - [x] 按 walnascar 迁移指南重写 `PREFERRED_PROVIDER_virtual/*`（切换到 `virtual/cross-*` 写法），清理遗留的 `${TARGET_PREFIX}` 字符串（确认无遗留写法）。
 
 ## 4. 镜像与配方修复
-- [ ] 替换所有 `debug-tweaks`（例如 `meta-dstack/recipes-core/images/dstack-rootfs-dev.inc:4`、`meta-confidential-compute/recipes-core/images/cvm-initramfs.bb:15`）为显式 `allow-empty-password` 等组合。
+- [x] 替换所有 `debug-tweaks`（例如 `meta-dstack/recipes-core/images/dstack-rootfs-dev.inc:4`、`meta-confidential-compute/recipes-core/images/cvm-initramfs.bb:15`）为显式 `allow-empty-password` 等组合。
 - [ ] 检查 `systemd` 255 带来的安装目录变化：确认 `meta-dstack/recipes-core/systemd/systemd_%.bbappend` 仍能安装 blacklist、`docker.service` override 仍被打包。
 - [ ] 移除 `pahole_1.25.bbappend`（walnascar 自带 1.29），确认 BTF 依赖满足。
 - [ ] 校验 `docker-moby`、`docker-compose`、`containerd` 名称/插件目录是否有改动，必要时调整 `IMAGE_INSTALL`。
