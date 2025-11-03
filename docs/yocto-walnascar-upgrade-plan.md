@@ -17,9 +17,9 @@
 - [x] `meta-rust-bin` 若继续跟踪 master，补充 `LAYERSERIES_COMPAT_rust-bin-layer += "walnascar"`，并校验 1.86 二进制是否可在 glibc 2.41 上编译。
 
 ## 3. 自有 Layer 适配
-- [ ] 更新 `meta-dstack/conf/layer.conf`、`meta-confidential-compute/conf/layer.conf`、`meta-security` 相关动态层的 `LAYERSERIES_COMPAT` 到 `walnascar`。
-- [ ] bump `DISTRO_VERSION`，同步 changelog / release note。
-- [ ] 按 walnascar 迁移指南重写 `PREFERRED_PROVIDER_virtual/*`（切换到 `virtual/cross-*` 写法），清理遗留的 `${TARGET_PREFIX}` 字符串。
+- [x] 更新 `meta-dstack/conf/layer.conf`、`meta-confidential-compute/conf/layer.conf`、`meta-security` 相关动态层的 `LAYERSERIES_COMPAT` 到 `walnascar`。
+- [x] bump `DISTRO_VERSION`，同步 changelog / release note。
+- [x] 按 walnascar 迁移指南重写 `PREFERRED_PROVIDER_virtual/*`（切换到 `virtual/cross-*` 写法），清理遗留的 `${TARGET_PREFIX}` 字符串（确认无遗留写法）。
 
 ## 4. 镜像与配方修复
 - [ ] 替换所有 `debug-tweaks`（例如 `meta-dstack/recipes-core/images/dstack-rootfs-dev.inc:4`、`meta-confidential-compute/recipes-core/images/cvm-initramfs.bb:15`）为显式 `allow-empty-password` 等组合。
