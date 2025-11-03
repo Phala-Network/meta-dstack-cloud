@@ -9,11 +9,9 @@ FILES:${PN} = "*"
 
 inherit allarch
 
-S = "${WORKDIR}"
-
 do_install() {
     install -d ${D}/
     install -d ${D}/scripts
     install -d ${D}/${bindir}
-    install -m 0755 ${S}/init ${D}/init
+    install -m 0755 ${WORKDIR}/init ${D}/init
 }
