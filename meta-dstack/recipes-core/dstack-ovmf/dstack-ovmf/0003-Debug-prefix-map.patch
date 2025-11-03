@@ -3,6 +3,8 @@ From: Kevin Wang <wy721@qq.com>
 Date: Mon, 4 Nov 2024 04:29:03 +0000
 Subject: [PATCH 3/5] Debug prefix map
 
+Upstream-Status: Pending [ensure reproducible debug paths in Yocto]
+
 ---
  BaseTools/Conf/tools_def.template | 18 +++++++++---------
  1 file changed, 9 insertions(+), 9 deletions(-)
@@ -87,4 +89,3 @@ index 0f110fbb4a..35205db748 100755
    DEBUG_GCC5_X64_DLINK_FLAGS     = DEF(GCC5_X64_DLINK_FLAGS) -flto -Os
 -- 
 2.43.0
-

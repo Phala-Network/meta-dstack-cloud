@@ -3,6 +3,8 @@ From: Kevin Wang <wy721@qq.com>
 Date: Mon, 4 Nov 2024 04:29:41 +0000
 Subject: [PATCH 4/5] Reproduciable
 
+Upstream-Status: Pending [reproducible-build tweak for Yocto]
+
 ---
  BaseTools/Source/C/GenFw/Elf64Convert.c       |  8 ++++---
  .../Source/Python/AutoGen/BuildEngine.py      |  3 +++
@@ -153,4 +155,3 @@ index 65a2176ca9..318b9611ce 100755
          if self.IsBinaryModule:
 -- 
 2.43.0
-
