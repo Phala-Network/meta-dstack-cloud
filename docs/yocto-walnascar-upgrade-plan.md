@@ -11,10 +11,10 @@
 - [ ] 调整 `build/conf/bblayers.conf`、`bb-build/conf/bblayers.conf` 指向更新后的本地路径；清理临时 `tmp/poky-yocto-5.2.4` 副本。
 
 ## 2. 上游 Layer 迁移
-- [ ] `meta-openembedded` → `origin/walnascar`（07330a98cf93…），检查动态层生成脚本。
-- [ ] `meta-security` → `origin/walnascar`（1f7eeb8e8481…），同步其子层 `LAYERSERIES_COMPAT = "styhead walnascar"`。
-- [ ] `meta-virtualization`：将本地分支 `reproducible` 等 rebase 到 upstream walnascar（38008d99d5be…），逐一确认自有 Docker/Xen 等补丁。
-- [ ] `meta-rust-bin` 若继续跟踪 master，补充 `LAYERSERIES_COMPAT_rust-bin-layer += "walnascar"`，并校验 1.86 二进制是否可在 glibc 2.41 上编译。
+- [x] `meta-openembedded` → `origin/walnascar`（07330a98cf93…），检查动态层生成脚本。
+- [x] `meta-security` → `origin/walnascar`（1f7eeb8e8481…），同步其子层 `LAYERSERIES_COMPAT = "styhead walnascar"`。
+- [x] `meta-virtualization`：将本地分支 `reproducible` 等 rebase 到 upstream walnascar（38008d99d5be…），逐一确认自有 Docker/Xen 等补丁。
+- [x] `meta-rust-bin` 若继续跟踪 master，补充 `LAYERSERIES_COMPAT_rust-bin-layer += "walnascar"`，并校验 1.86 二进制是否可在 glibc 2.41 上编译。
 
 ## 3. 自有 Layer 适配
 - [ ] 更新 `meta-dstack/conf/layer.conf`、`meta-confidential-compute/conf/layer.conf`、`meta-security` 相关动态层的 `LAYERSERIES_COMPAT` 到 `walnascar`。
