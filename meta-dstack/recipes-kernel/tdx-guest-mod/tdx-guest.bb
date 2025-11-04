@@ -14,3 +14,5 @@ SRCREV = "${DSTACK_SRC_REV}"
 S = "${WORKDIR}/${SRC_DIR}"
 
 RPROVIDES:${PN} += "tdx-guest-ko"
+INSANE_SKIP:${PN} += "buildpaths"
+INSANE_SKIP:${PN}-dbg += "buildpaths"

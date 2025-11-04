@@ -8,6 +8,10 @@ FILES:${PN} += "${systemd_system_unitdir}/docker.service.d/override.conf"
 do_install:append() {
     if ${@bb.utils.contains('DISTRO_FEATURES', 'systemd', 'true', 'false', d)}; then
         install -d ${D}${systemd_system_unitdir}/docker.service.d
-        install -m 0644 ${WORKDIR}/docker.service.d_override.conf ${D}${systemd_system_unitdir}/docker.service.d/override.conf
+        src="${WORKDIR}/docker.service.d_override.conf"
+        if [ -n "${UNPACKDIR}" ] && [ -f "${UNPACKDIR}/docker.service.d_override.conf" ]; then
+            src="${UNPACKDIR}/docker.service.d_override.conf"
+        fi
+        install -m 0644 "${src}" ${D}${systemd_system_unitdir}/docker.service.d/override.conf
     fi
 }
