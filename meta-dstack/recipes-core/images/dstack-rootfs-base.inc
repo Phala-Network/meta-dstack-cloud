@@ -20,7 +20,6 @@ IMAGE_INSTALL = "\
     jq \
     chrony \
     chronyc \
-    zfs \
     kernel-module-tun \
     kernel-module-fuse \
     kernel-module-br-netfilter \

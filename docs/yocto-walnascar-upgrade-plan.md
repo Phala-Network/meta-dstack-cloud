@@ -30,7 +30,7 @@
 
 ## 5. 内核策略
 - [ ] 如果接受官方 6.12：改用 `linux-yocto_6.12.bb` 或 `linux-yocto-tiny_6.12.bb`，重生成 `KMACHINE` 所需的 `scc`/`cfg`，确保 `KERNEL_DEBUG = "True"` 正常触发 `pahole-native`。
-- [ ] 若坚持 6.17：拉取 Yocto 邮件列表的 6.17 系列（14 个 patch），或自建 `linux-custom_6.17.bb`，将现有 `.scc` / `.cfg` 排查冲突后重放；同步最新 `yocto-kernel-cache` feature 分支。
+- [x] 若坚持 6.17：拉取 Yocto 邮件列表的 6.17 系列（14 个 patch），或自建 `linux-custom_6.17.bb`，将现有 `.scc` / `.cfg` 排查冲突后重放；同步最新 `yocto-kernel-cache` feature 分支。
 - [ ] Tiny 发行版（cvm/tdx）需要验证新内核 config 片段是否满足 TDX/TDX driver、EFI secret 等选项。
 
 ## 6. 安全与存储
