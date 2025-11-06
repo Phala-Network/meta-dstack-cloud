@@ -15,6 +15,10 @@ mount -t devtmpfs devtmpfs /dev
 
 mkdir -p /dev/pts
 
+ROOT_DEV=""
+ROOT_HASH=""
+DATA_SIZE=""
+
 # Parse kernel parameters
 for param in $(cat /proc/cmdline); do
 	case "$param" in
@@ -24,11 +28,17 @@ for param in $(cat /proc/cmdline); do
 		"dstack.rootfs_size="*)
 			DATA_SIZE="${param#*=}"
 			;;
+		"dstack.rootfs_dev="*)
+			ROOT_DEV="${param#*=}"
+			;;
 		*)
 			;;
 	esac
 done
-ROOT_DEV=/dev/vda
+
+if [ -z "${ROOT_DEV}" ]; then
+	ROOT_DEV=/dev/vda
+fi
 ROOT_DIR=/root
 
 echo "Setting up verity device:"
