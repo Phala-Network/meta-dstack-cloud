@@ -75,7 +75,7 @@ terminal_output serial console
 
 menuentry "DStack Guest" {
     search --file --no-floppy --set=root /bzImage
-    linux /bzImage $KARG0 $KARG1 $KARG2 dstack.rootfs_dev=PARTLABEL=dstack-rootfs
+    linux /bzImage $KARG0 $KARG1 $KARG2
     initrd /initramfs.cpio.gz
 }
 EOF
@@ -161,7 +161,7 @@ echo "Generating metadata.json to ${OUTPUT_DIR}/metadata.json"
 
 KARG0="console=ttyS0 init=/init panic=1 net.ifnames=0 biosdevname=0"
 KARG1="mce=off oops=panic pci=noearly pci=nommconf random.trust_cpu=y random.trust_bootloader=n tsc=reliable no-kvmclock"
-KARG2="dstack.rootfs_hash=$ROOT_HASH dstack.rootfs_size=$DATA_SIZE coherent_pool=8M"
+KARG2="dstack.rootfs_hash=$ROOT_HASH dstack.rootfs_size=$DATA_SIZE dstack.rootfs_device=PARTLABEL=dstack-rootfs"
 
 cat <<EOF > ${OUTPUT_DIR}/metadata.json
 {

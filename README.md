@@ -11,8 +11,8 @@ See https://github.com/Dstack-TEE/dstack for more details.
 The guest initramfs recognises a few `dstack.*` kernel cmdline parameters to drive early boot:
 
 - `dstack.rootfs_hash` and `dstack.rootfs_size` are required to unlock the dm-verity protected squashfs rootfs.
-- `dstack.rootfs_dev` (optional) overrides the default `/dev/vda` block device that stores the verity data and hash. Set this when the root filesystem lives on a different disk or naming scheme (for example `/dev/sdb`, `PARTLABEL=dstack-rootfs`, or `/dev/disk/by-id/...`).
-- `dstack.data_dev` (optional) overrides the persistent data disk picked by `dstack-prepare`. It accepts the same values as `dstack.rootfs_dev` (absolute paths or `PARTLABEL=/PARTUUID=` selectors) and is useful on clouds that only expose NVMe namespaces.
+- `dstack.rootfs_device` (optional) overrides the default `/dev/vda` block device that stores the verity data and hash. Set this when the root filesystem lives on a different disk or naming scheme (for example `/dev/sdb`, `PARTLABEL=dstack-rootfs`, or `/dev/disk/by-id/...`).
+- `dstack.data_dev` (optional) overrides the persistent data disk picked by `dstack-prepare`. It accepts the same values as `dstack.rootfs_device` (absolute paths or `PARTLABEL=/PARTUUID=` selectors) and is useful on clouds that only expose NVMe namespaces.
 - `coherent_pool=8M` (always added) ensures the DMA atomic pool is large enough for early NVMe/verity traffic on clouds that lack bounce buffers (for example GCP TDX).
 
 ## Google Cloud image output

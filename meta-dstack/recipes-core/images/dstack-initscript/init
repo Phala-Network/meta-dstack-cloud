@@ -180,6 +180,14 @@ resolve_root_from_param() {
     fi
 
     case "$ROOT_PARAM" in
+        PARTLABEL=*)
+            label="${ROOT_PARAM#PARTLABEL=}"
+            log "root= uses PARTLABEL=${label}"
+            if [ -n "$label" ] && find_device_by_partlabel "$label"; then
+                ROOT_PARAM_RESULT="$DEVICE_RESULT"
+            fi
+            return
+            ;;
         PARTUUID=*)
             partuuid=$(echo "${ROOT_PARAM#PARTUUID=}" | tr '[:upper:]' '[:lower:]')
             log "root= uses PARTUUID=${partuuid}"
@@ -252,7 +260,15 @@ resolve_root_from_param() {
 
 resolve_root_device() {
     if [ -n "$ROOTFS_DEVICE" ]; then
-        log "using dstack.rootfs_device=${ROOTFS_DEVICE}"
+        ROOT_PARAM="$ROOTFS_DEVICE"
+        ROOT_PARAM_RESULT=""
+        resolve_root_from_param
+        if [ -n "$ROOT_PARAM_RESULT" ]; then
+            log "using dstack.rootfs_device=${ROOTFS_DEVICE} (resolved to ${ROOT_PARAM_RESULT})"
+            ROOT_DEVICE_RESULT="$ROOT_PARAM_RESULT"
+            return
+        fi
+        log "using dstack.rootfs_device literal value ${ROOTFS_DEVICE}"
         ROOT_DEVICE_RESULT="$ROOTFS_DEVICE"
         return
     fi
@@ -576,19 +592,32 @@ main() {
     mount_move_all sys proc dev run
 
     log "invoking switch_root to ${ROOT_DIR} with init=/sbin/init"
-    if ! switch_root ${ROOT_DIR} /sbin/init; then
+    if command -v switch_root >/dev/null 2>&1; then
+        set +e
+        exec switch_root ${ROOT_DIR} /sbin/init
         status=$?
-        log "switch_root failed with status ${status}"
-        if [ -d "${ROOT_DIR}" ]; then
-            log "root directory ${ROOT_DIR} contents:"
-            for entry in "${ROOT_DIR}"/*; do
-                log "  $(basename "$entry")"
-            done
+        set -e
+        if [ $status -eq 0 ]; then
+            log "switch_root returned unexpectedly with status 0"
         else
-            log "root directory ${ROOT_DIR} is missing"
+            log "switch_root failed with status ${status}"
         fi
-        exec /bin/sh -i </dev/console >/dev/console 2>&1
+    else
+        log "switch_root binary not found; skipping direct handoff"
+        status=127
     fi
+
+    if [ -d "${ROOT_DIR}" ]; then
+        log "root directory ${ROOT_DIR} contents:"
+        for entry in "${ROOT_DIR}"/*; do
+            log "  $(basename "$entry")"
+        done
+    else
+        log "root directory ${ROOT_DIR} is missing"
+    fi
+
+    log "falling back to chroot exec for init handoff"
+    exec chroot ${ROOT_DIR} /sbin/init </dev/console >/dev/console 2>&1
 }
 
 main "$@"
