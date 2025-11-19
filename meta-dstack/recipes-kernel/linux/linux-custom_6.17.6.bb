@@ -15,6 +15,7 @@ DEPENDS += "libyaml-native openssl-native util-linux-native"
 
 SRC_URI = "https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-${PV}.tar.xz;downloadfilename=linux-${PV}.tar.xz \
            file://defconfig \
+           file://0003-dma-pool-grow-atomic-pool-immediately.patch \
 "
 
 SRC_URI[sha256sum] = "8ecfbc6b693448abb46144a8d04d1e1631639c7661c1088425a2e5406f13c69c"

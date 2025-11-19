@@ -2,6 +2,7 @@
 set -e
 
 DSTACK_TAR_RELEASE=${DSTACK_TAR_RELEASE:-1}
+ENABLE_GCP_IMAGE=${ENABLE_GCP_IMAGE:-1}
 
 # Parse command line arguments
 while [ $# -gt 0 ]; do
@@ -55,6 +56,97 @@ verbose() {
     $@
 }
 
+align_up() {
+    local value=$1
+    local align=$2
+    echo $(( ( (value + align - 1) / align ) * align ))
+}
+
+create_grub_bootstrap() {
+    local target_dir="$1"
+    local cfg_file
+    cfg_file=$(mktemp)
+cat <<EOF > "$cfg_file"
+set default=0
+set timeout=0
+serial --unit=0 --speed=115200 --word=8 --parity=no --stop=1
+terminal_input serial console
+terminal_output serial console
+
+menuentry "DStack Guest" {
+    search --file --no-floppy --set=root /bzImage
+    linux /bzImage $KARG0 $KARG1 $KARG2 dstack.rootfs_dev=PARTLABEL=dstack-rootfs
+    initrd /initramfs.cpio.gz
+}
+EOF
+    mkdir -p "$target_dir/EFI/BOOT"
+    grub-mkstandalone \
+        --disable-shim-lock \
+        --modules="normal linux part_gpt fat search serial configfile" \
+        -O x86_64-efi \
+        -o "$target_dir/EFI/BOOT/BOOTX64.EFI" \
+        "boot/grub/grub.cfg=$cfg_file"
+    rm -f "$cfg_file"
+    cp "$KERNEL_IMAGE" "$target_dir/bzImage"
+    cp "$INITRAMFS_IMAGE" "$target_dir/initramfs.cpio.gz"
+}
+
+build_gcp_disk_image() {
+    local disk_img="$1"
+    local boot_source="$2"
+    local rootfs_img="$3"
+    (
+        set -e
+        local align=$((1024 * 1024))
+        local sector=512
+        local efi_size=$((256 * 1024 * 1024))
+        local efi_size_aligned=$(align_up $efi_size $align)
+        local rootfs_size=$(stat -c %s "$rootfs_img")
+        local rootfs_size_aligned=$(align_up $rootfs_size $align)
+        local efi_start=$align
+        local rootfs_start=$((efi_start + efi_size_aligned))
+        # Leave extra room for the backup GPT header
+        local total_size=$(align_up $((rootfs_start + rootfs_size_aligned + align)) $align)
+
+        truncate -s $total_size "$disk_img"
+
+        local efi_start_sector=$((efi_start / sector))
+        local efi_end_sector=$((efi_start_sector + (efi_size_aligned / sector) - 1))
+        local root_start_sector=$((rootfs_start / sector))
+        local root_end_sector=$((root_start_sector + (rootfs_size_aligned / sector) - 1))
+
+        sgdisk --zap-all "$disk_img" >/dev/null
+        sgdisk --new=1:${efi_start_sector}:${efi_end_sector} --typecode=1:ef00 --change-name=1:'EFI System Partition' "$disk_img" >/dev/null
+        sgdisk --new=2:${root_start_sector}:${root_end_sector} --typecode=2:8300 --change-name=2:'dstack-rootfs' "$disk_img" >/dev/null
+
+        local tmp_dir
+        tmp_dir=$(mktemp -d)
+        trap 'rm -rf "$tmp_dir"' EXIT
+        local efi_img=${tmp_dir}/efi.img
+        mkfs.vfat -F 32 -n DSTACKEFI -C "$efi_img" $((efi_size_aligned / 1024)) >/dev/null
+        (cd "$boot_source" && mcopy -s -i "$efi_img" ./* ::) >/dev/null
+
+        dd if="$efi_img" of="$disk_img" bs=$align seek=$((efi_start / align)) conv=notrunc status=none
+        dd if="$rootfs_img" of="$disk_img" bs=$align seek=$((rootfs_start / align)) conv=notrunc status=none
+    )
+}
+
+create_gcp_artifacts() {
+    local gcp_dir="${OUTPUT_DIR}/gcp"
+    local boot_src="${gcp_dir}/efi-root"
+    mkdir -p "$boot_src"
+    echo "Generating GRUB EFI loader for GCP at ${boot_src}"
+    create_grub_bootstrap "$boot_src"
+
+    local disk_img="${gcp_dir}/disk.raw"
+    echo "Building raw disk image for GCP at ${disk_img}"
+    build_gcp_disk_image "$disk_img" "$boot_src" "${OUTPUT_DIR}/rootfs.img.verity"
+
+    local tarball="${DIST_DIR}/${DIST_NAME}-${DSTACK_VERSION}-gcp.tar.gz"
+    echo "Archiving GCP disk image to ${tarball}"
+    (cd "$gcp_dir" && tar -czvf "$tarball" disk.raw)
+}
+
 Q=verbose
 
 $Q rm -rf ${OUTPUT_DIR}/
@@ -69,7 +161,7 @@ echo "Generating metadata.json to ${OUTPUT_DIR}/metadata.json"
 
 KARG0="console=ttyS0 init=/init panic=1 net.ifnames=0 biosdevname=0"
 KARG1="mce=off oops=panic pci=noearly pci=nommconf random.trust_cpu=y random.trust_bootloader=n tsc=reliable no-kvmclock"
-KARG2="dstack.rootfs_hash=$ROOT_HASH dstack.rootfs_size=$DATA_SIZE"
+KARG2="dstack.rootfs_hash=$ROOT_HASH dstack.rootfs_size=$DATA_SIZE coherent_pool=8M"
 
 cat <<EOF > ${OUTPUT_DIR}/metadata.json
 {
@@ -90,6 +182,17 @@ pushd ${OUTPUT_DIR}/
 sha256sum ovmf.fd bzImage initramfs.cpio.gz metadata.json > sha256sum.txt
 sha256sum sha256sum.txt | awk '{print $1}' > digest.txt
 popd
+
+if [ "$ENABLE_GCP_IMAGE" = "1" ]; then
+    if command -v grub-mkstandalone >/dev/null && \
+       command -v sgdisk >/dev/null && \
+       command -v mkfs.vfat >/dev/null && \
+        command -v mcopy >/dev/null; then
+        create_gcp_artifacts
+    else
+        echo "Skipping GCP disk image creation because grub-mkstandalone/sgdisk/mtools are missing" >&2
+    fi
+fi
 
 if [ x$DSTACK_TAR_RELEASE = x1 ]; then
     IMAGE_TAR_MR=${DIST_DIR}/mr_$(cat ${OUTPUT_DIR}/digest.txt | tr -d '\n').tar.gz

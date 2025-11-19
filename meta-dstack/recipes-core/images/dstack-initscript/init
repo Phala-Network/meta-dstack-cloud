@@ -1,6 +1,87 @@
 #!/bin/sh
 set -e
 
+read_uevent_property() {
+    local file="$1"
+    local key="$2"
+    while IFS='=' read -r name value; do
+        if [ "$name" = "$key" ]; then
+            printf "%s" "$value"
+            return 0
+        fi
+    done < "$file"
+    return 1
+}
+
+find_block_by_property() {
+    local key="$1"
+    local value="$2"
+    local entry
+    for entry in /sys/class/block/*; do
+        [ -e "$entry/uevent" ] || continue
+        local current
+        current=$(read_uevent_property "$entry/uevent" "$key" || true)
+        if [ "$current" = "$value" ]; then
+            printf "/dev/%s" "$(basename "$entry")"
+            return 0
+        fi
+    done
+    return 1
+}
+
+resolve_block_device() {
+    local spec="$1"
+    local device=""
+    case "$spec" in
+    "")
+        return 1
+        ;;
+    PARTLABEL=*)
+        device=$(find_block_by_property PARTNAME "${spec#PARTLABEL=}" || true)
+        if [ -z "$device" ]; then
+            device=$(blkid -o device -l -t "$spec" 2>/dev/null | head -n1 || true)
+        fi
+        ;;
+    PARTUUID=*)
+        device=$(find_block_by_property PARTUUID "${spec#PARTUUID=}" || true)
+        if [ -z "$device" ]; then
+            device=$(blkid -o device -l -t "$spec" 2>/dev/null | head -n1 || true)
+        fi
+        ;;
+    UUID=*|LABEL=*|ID=*)
+        device=$(blkid -o device -l -t "$spec" 2>/dev/null | head -n1 || true)
+        ;;
+    /dev/*)
+        device="$spec"
+        ;;
+    *)
+        device="/dev/$spec"
+        ;;
+    esac
+    if [ -n "$device" ] && [ -b "$device" ]; then
+        printf "%s" "$device"
+        return 0
+    fi
+    return 1
+}
+
+resolve_block_device_with_retry() {
+	local spec="$1"
+	local attempt=0
+	[ -n "$spec" ] || return 1
+	while [ $attempt -lt 10 ]; do
+		local dev
+		dev=$(resolve_block_device "$spec" || true)
+		if [ -n "$dev" ] && [ -b "$dev" ]; then
+			printf "%s" "$dev"
+			return 0
+		fi
+		sleep 1
+		attempt=$((attempt + 1))
+	done
+	return 1
+}
+
 export PATH=/sbin:/bin:/usr/sbin:/usr/bin
 
 mkdir -p /proc
@@ -36,9 +117,18 @@ for param in $(cat /proc/cmdline); do
 	esac
 done
 
-if [ -z "${ROOT_DEV}" ]; then
+ROOT_DEV=$(resolve_block_device_with_retry "$ROOT_DEV" || true)
+if [ -z "$ROOT_DEV" ]; then
+	ROOT_DEV=$(resolve_block_device_with_retry "PARTLABEL=dstack-rootfs" || true)
+fi
+if [ -z "$ROOT_DEV" ] && [ -b /dev/vda ]; then
 	ROOT_DEV=/dev/vda
 fi
+if [ -z "$ROOT_DEV" ]; then
+	echo "Failed to determine root device" >&2
+	exec sh
+fi
+echo "Resolved root device to ${ROOT_DEV}"
 ROOT_DIR=/root
 
 echo "Setting up verity device:"
