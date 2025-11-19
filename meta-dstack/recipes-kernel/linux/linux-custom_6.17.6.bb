@@ -11,10 +11,11 @@ inherit kernel
 
 FILESEXTRAPATHS:prepend := "${THISDIR}/files/6.17:${THISDIR}/files:"
 
-DEPENDS += "libyaml-native openssl-native util-linux-native"
+DEPENDS += "libyaml-native openssl-native util-linux-native elfutils-native"
 
 SRC_URI = "https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-${PV}.tar.xz;downloadfilename=linux-${PV}.tar.xz \
            file://defconfig \
+           file://0002-x86-tdx-select-dma-direct-remap.patch \
            file://0003-dma-pool-grow-atomic-pool-immediately.patch \
 "
 

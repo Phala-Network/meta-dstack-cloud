@@ -7,7 +7,10 @@ SRC_URI += "file://dstack-docker.cfg \
             file://dstack-tdx.cfg \
             file://dstack-tdx.scc \
             file://dstack.cfg \
-            file://dstack.scc"
+            file://dstack.scc \
+            file://0001-dma-direct-downgrade-coherent-pool-warning.patch \
+            file://0002-x86-tdx-select-dma-direct-remap.patch \
+            file://0003-dma-pool-grow-atomic-pool-immediately.patch"
 
 KERNEL_FEATURES:append = " features/cgroups/cgroups.scc \
                           features/overlayfs/overlayfs.scc \

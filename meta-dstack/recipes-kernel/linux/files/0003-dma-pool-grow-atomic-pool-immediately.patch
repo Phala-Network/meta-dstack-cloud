@@ -1,0 +1,61 @@
+From 0c329c6db0ad7f82f8efd21d92907183b91cf9bf Mon Sep 17 00:00:00 2001
+From: Codex Agent <codex@example.com>
+Date: Mon, 17 Feb 2025 23:41:00 +0000
+Subject: [PATCH] dma/pool: grow coherent pool to requested size during init
+
+TDX and SEV guests rely on coherent DMA pools for every GFP_ATOMIC
+dma_alloc_coherent() call, so configurations that request a large
+coherent_pool (for example 64M) still start with the small chunk allowed
+by MAX_PAGE_ORDER and only expand later via the background worker. Under
+high-queue-depth NVMe I/O this tiny initial pool exhausts before the
+worker can add memory, blocking NVMe requests during Stage0 boot on GCP
+TDX guests.
+
+Extend __dma_atomic_pool_init() to keep allocating chunks until the
+requested coherent_pool size is satisfied. If we can't reach the target
+we keep the existing memory but log a warning so operators know the pool
+is smaller than requested.
+
+Upstream-Status: Pending
+Signed-off-by: Codex Agent <codex@example.com>
+---
+ kernel/dma/pool.c | 17 +++++++++++++++++
+ 1 file changed, 17 insertions(+)
+
+diff --git a/kernel/dma/pool.c b/kernel/dma/pool.c
+index 3927dccdc18d..a7cc1f4d435d 100644
+--- a/kernel/dma/pool.c
++++ b/kernel/dma/pool.c
+@@ -164,6 +164,8 @@
+ {
+ 	struct gen_pool *pool;
+ 	int ret;
++	size_t have;
++	bool warn_partial = false;
+ 
+ 	pool = gen_pool_create(PAGE_SHIFT, NUMA_NO_NODE);
+ 	if (!pool)
+@@ -178,6 +180,21 @@
+ 		       pool_size >> 10, &gfp);
+ 		return NULL;
+ 	}
++	if (atomic_pool_size) {
++		while ((have = gen_pool_size(pool)) < atomic_pool_size) {
++			size_t remaining = atomic_pool_size - have;
++
++			ret = atomic_pool_expand(pool, remaining, gfp);
++			if (ret) {
++				warn_partial = true;
++				break;
++			}
++		}
++	}
++
++	if (warn_partial)
++		pr_warn("DMA: requested %zu KiB atomic pool, allocated %zu KiB\n",
++			atomic_pool_size >> 10, gen_pool_size(pool) >> 10);
+ 
+ 	pr_info("DMA: preallocated %zu KiB %pGg pool for atomic allocations\n",
+ 		gen_pool_size(pool) >> 10, &gfp);
+-- 
+2.46.0

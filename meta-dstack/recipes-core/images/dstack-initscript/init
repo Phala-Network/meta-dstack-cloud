@@ -1,152 +1,594 @@
 #!/bin/sh
 set -e
 
-read_uevent_property() {
-    local file="$1"
-    local key="$2"
-    while IFS='=' read -r name value; do
-        if [ "$name" = "$key" ]; then
-            printf "%s" "$value"
-            return 0
-        fi
-    done < "$file"
-    return 1
-}
-
-find_block_by_property() {
-    local key="$1"
-    local value="$2"
-    local entry
-    for entry in /sys/class/block/*; do
-        [ -e "$entry/uevent" ] || continue
-        local current
-        current=$(read_uevent_property "$entry/uevent" "$key" || true)
-        if [ "$current" = "$value" ]; then
-            printf "/dev/%s" "$(basename "$entry")"
-            return 0
+attach_console() {
+    for dev in /dev/console /dev/ttyS0 /dev/ttyS1 /dev/hvc0 /dev/vport0p1; do
+        if [ -c "$dev" ]; then
+            exec >"$dev" 2>&1
+            printf '[init] console attached to %s\n' "$dev"
+            return
         fi
     done
-    return 1
+    # Fallback: leave stdout/stderr as-is if no console discovered.
 }
 
-resolve_block_device() {
-    local spec="$1"
-    local device=""
-    case "$spec" in
-    "")
-        return 1
-        ;;
-    PARTLABEL=*)
-        device=$(find_block_by_property PARTNAME "${spec#PARTLABEL=}" || true)
-        if [ -z "$device" ]; then
-            device=$(blkid -o device -l -t "$spec" 2>/dev/null | head -n1 || true)
-        fi
-        ;;
-    PARTUUID=*)
-        device=$(find_block_by_property PARTUUID "${spec#PARTUUID=}" || true)
-        if [ -z "$device" ]; then
-            device=$(blkid -o device -l -t "$spec" 2>/dev/null | head -n1 || true)
-        fi
-        ;;
-    UUID=*|LABEL=*|ID=*)
-        device=$(blkid -o device -l -t "$spec" 2>/dev/null | head -n1 || true)
-        ;;
-    /dev/*)
-        device="$spec"
-        ;;
-    *)
-        device="/dev/$spec"
-        ;;
-    esac
-    if [ -n "$device" ] && [ -b "$device" ]; then
-        printf "%s" "$device"
-        return 0
-    fi
-    return 1
+log() {
+    printf '[init] %s\n' "$*" >&2
 }
-
-resolve_block_device_with_retry() {
-	local spec="$1"
-	local attempt=0
-	[ -n "$spec" ] || return 1
-	while [ $attempt -lt 10 ]; do
-		local dev
-		dev=$(resolve_block_device "$spec" || true)
-		if [ -n "$dev" ] && [ -b "$dev" ]; then
-			printf "%s" "$dev"
-			return 0
-		fi
-		sleep 1
-		attempt=$((attempt + 1))
-	done
-	return 1
-}
-
-export PATH=/sbin:/bin:/usr/sbin:/usr/bin
-
-mkdir -p /proc
-mkdir -p /sys
-mkdir -p /run
-mount -t proc proc /proc
-mount -t sysfs sysfs /sys
-mount -t tmpfs tmpfs /run
-
-mkdir -p /dev
-mount -t devtmpfs devtmpfs /dev
-
-mkdir -p /dev/pts
-
-ROOT_DEV=""
-ROOT_HASH=""
-DATA_SIZE=""
-
-# Parse kernel parameters
-for param in $(cat /proc/cmdline); do
-	case "$param" in
-		"dstack.rootfs_hash="*)
-			ROOT_HASH="${param#*=}"
-			;;
-		"dstack.rootfs_size="*)
-			DATA_SIZE="${param#*=}"
-			;;
-		"dstack.rootfs_dev="*)
-			ROOT_DEV="${param#*=}"
-			;;
-		*)
-			;;
-	esac
-done
-
-ROOT_DEV=$(resolve_block_device_with_retry "$ROOT_DEV" || true)
-if [ -z "$ROOT_DEV" ]; then
-	ROOT_DEV=$(resolve_block_device_with_retry "PARTLABEL=dstack-rootfs" || true)
-fi
-if [ -z "$ROOT_DEV" ] && [ -b /dev/vda ]; then
-	ROOT_DEV=/dev/vda
-fi
-if [ -z "$ROOT_DEV" ]; then
-	echo "Failed to determine root device" >&2
-	exec sh
-fi
-echo "Resolved root device to ${ROOT_DEV}"
-ROOT_DIR=/root
-
-echo "Setting up verity device:"
-echo "  Root device: ${ROOT_DEV}"
-echo "  Root hash: ${ROOT_HASH}"
-echo "  Data size: ${DATA_SIZE}"
-
-veritysetup open ${ROOT_DEV} rootfs ${ROOT_DEV} "${ROOT_HASH}" --hash-offset="${DATA_SIZE}"
-
-echo "Mounting rootfs..."
-mount -t squashfs /dev/mapper/rootfs ${ROOT_DIR}
 
 mount_move_all() {
-    for dir in $@; do
-        mount --move /$dir ${ROOT_DIR}/$dir
+    for dir in "$@"; do
+        mount --move "/$dir" "${ROOT_DIR}/$dir"
     done
 }
-mount_move_all sys proc dev run
 
-echo "Switching to new root..."
-exec switch_root ${ROOT_DIR} /sbin/init
+test_device_read() {
+    local dev="$1"
+    local label="$2"
+    if [ ! -e "$dev" ]; then
+        log "device ${dev} (${label}) missing"
+        return 1
+    fi
+    log "probing ${label} (${dev}) with dd 4K read"
+    set +e
+    dd if="${dev}" of=/dev/null bs=4096 count=1 2>&1 &
+    local pid=$!
+    local deadline=5
+    local elapsed=0
+    local stuck=0
+    while kill -0 "${pid}" 2>/dev/null; do
+        sleep 1
+        elapsed=$((elapsed + 1))
+        if [ "${elapsed}" -ge "${deadline}" ]; then
+            log "dd probe on ${dev} still running after ${elapsed}s; sending TERM"
+            kill "${pid}" 2>/dev/null || true
+            sleep 1
+            if kill -0 "${pid}" 2>/dev/null; then
+                log "dd probe on ${dev} ignoring TERM; sending KILL"
+                kill -KILL "${pid}" 2>/dev/null || true
+                sleep 1
+                if kill -0 "${pid}" 2>/dev/null; then
+                    log "dd probe on ${dev} remained in D-state; skipping wait"
+                    stuck=1
+                fi
+            fi
+            break
+        fi
+    done
+    local status
+    if [ "${stuck}" -eq 1 ]; then
+        status=124
+    else
+        wait "${pid}" 2>/dev/null
+        status=$?
+    fi
+    set -e
+    log "dd probe on ${dev} completed with status ${status}"
+    return ${status}
+}
+
+dump_block_devices() {
+    log "enumerating block devices under /sys/class/block"
+    for entry in /sys/class/block/*; do
+        dev=$(basename "$entry")
+        size_file="${entry}/size"
+        if [ -f "$size_file" ]; then
+            sectors=$(cat "$size_file" 2>/dev/null)
+            case "$sectors" in
+                ''|*[!0-9]*)
+                    human="unknown"
+                    ;;
+                *)
+                    human=$(awk -v s="$sectors" 'BEGIN { printf "%.1f MiB", (s * 512) / (1024*1024) }')
+                    ;;
+            esac
+        else
+            sectors="?"
+            human="unknown"
+        fi
+        log "  ${dev}: sectors=${sectors} (${human})"
+    done
+}
+
+find_device_by_partlabel() {
+    label=$1
+
+    log "searching for PARTLABEL=${label}"
+
+    DEVICE_RESULT=""
+
+    if command -v blkid >/dev/null 2>&1; then
+        device=$(blkid -t "PARTLABEL=${label}" -o device 2>/dev/null | head -n1)
+        if [ -n "$device" ] && [ -b "$device" ]; then
+            log "blkid located ${device} for PARTLABEL=${label}"
+            if command -v realpath >/dev/null 2>&1; then
+                DEVICE_RESULT="$(realpath "$device")"
+            else
+                DEVICE_RESULT="$(readlink -f "$device")"
+            fi
+            [ -n "$DEVICE_RESULT" ] || DEVICE_RESULT="$device"
+            return 0
+        fi
+    fi
+
+    for entry in /sys/class/block/*; do
+        [ -f "$entry/partition" ] || continue
+        uevent="${entry}/uevent"
+        if [ -f "$uevent" ]; then
+            current=$(grep -E '^PARTNAME=' "$uevent" 2>/dev/null | head -n1 | cut -d= -f2)
+            if [ "${current}" = "$label" ]; then
+                device="/dev/$(basename "$entry")"
+                if [ -b "$device" ]; then
+                    log "sysfs matched PARTLABEL=${label} at ${device}"
+                    if command -v realpath >/dev/null 2>&1; then
+                        DEVICE_RESULT="$(realpath "$device")"
+                    else
+                        DEVICE_RESULT="$(readlink -f "$device")"
+                    fi
+                    [ -n "$DEVICE_RESULT" ] || DEVICE_RESULT="$device"
+                    return 0
+                fi
+            fi
+        fi
+    done
+
+    log "no device found for PARTLABEL=${label}"
+    return 1
+}
+
+find_largest_nvme_partition() {
+    best=""
+    best_size=0
+
+    DEVICE_RESULT=""
+
+    for entry in /sys/class/block/nvme*n1p*; do
+        size_file="${entry}/size"
+        [ -f "$size_file" ] || continue
+        size=$(cat "$size_file" 2>/dev/null)
+        case "$size" in
+            ''|*[!0-9]*)
+                continue
+                ;;
+        esac
+        if [ "$size" -gt "$best_size" ]; then
+            best_size=$size
+            best="/dev/$(basename "$entry")"
+        fi
+    done
+
+    if [ -n "$best" ]; then
+        if command -v realpath >/dev/null 2>&1; then
+            resolved=$(realpath "$best")
+        else
+            resolved=$(readlink -f "$best")
+        fi
+        log "using largest NVMe partition ${resolved} (sectors=${best_size})"
+        DEVICE_RESULT="$resolved"
+        return 0
+    fi
+
+    log "no NVMe partitions discovered"
+    return 1
+}
+
+resolve_root_from_param() {
+    ROOT_PARAM_RESULT=""
+    if [ -z "$ROOT_PARAM" ]; then
+        log "no root= parameter provided"
+        return
+    fi
+
+    case "$ROOT_PARAM" in
+        PARTUUID=*)
+            partuuid=$(echo "${ROOT_PARAM#PARTUUID=}" | tr '[:upper:]' '[:lower:]')
+            log "root= uses PARTUUID=${partuuid}"
+            DEVICE_RESULT=""
+            if command -v blkid >/dev/null 2>&1; then
+                device=$(blkid -t "PARTUUID=${partuuid}" -o device 2>/dev/null | head -n1)
+                if [ -n "$device" ] && [ -b "$device" ]; then
+                    log "blkid located ${device} for PARTUUID=${partuuid}"
+                    if command -v realpath >/dev/null 2>&1; then
+                        DEVICE_RESULT="$(realpath "$device")"
+                    else
+                        DEVICE_RESULT="$(readlink -f "$device")"
+                    fi
+                    [ -n "$DEVICE_RESULT" ] || DEVICE_RESULT="$device"
+                fi
+            fi
+            if [ -z "$DEVICE_RESULT" ]; then
+                for entry in /sys/class/block/*; do
+                    [ -f "$entry/partition" ] || continue
+                    uevent="${entry}/uevent"
+                    if [ -f "$uevent" ]; then
+                        current=$(grep -E '^PARTUUID=' "$uevent" 2>/dev/null | head -n1 | cut -d= -f2 | tr '[:upper:]' '[:lower:]')
+                        if [ "$current" = "$partuuid" ]; then
+                            device="/dev/$(basename "$entry")"
+                            if [ -b "$device" ]; then
+                                log "sysfs matched PARTUUID=${partuuid} at ${device}"
+                                if command -v realpath >/dev/null 2>&1; then
+                                    DEVICE_RESULT="$(realpath "$device")"
+                                else
+                                    DEVICE_RESULT="$(readlink -f "$device")"
+                                fi
+                                [ -n "$DEVICE_RESULT" ] || DEVICE_RESULT="$device"
+                                break
+                            fi
+                        fi
+                    fi
+                done
+            fi
+            if [ -n "$DEVICE_RESULT" ]; then
+                ROOT_PARAM_RESULT="$DEVICE_RESULT"
+                return
+            fi
+            if find_device_by_partlabel "dstack-rootfs"; then
+                ROOT_PARAM_RESULT="$DEVICE_RESULT"
+                return
+            fi
+            if find_largest_nvme_partition; then
+                ROOT_PARAM_RESULT="$DEVICE_RESULT"
+                return
+            fi
+            log "PARTUUID lookup failed; deferring to generic heuristics"
+            ;;
+        UUID=*)
+            uuid="${ROOT_PARAM#UUID=}"
+            log "root= uses UUID=${uuid}"
+            if [ -e "/dev/disk/by-uuid/${uuid}" ]; then
+                if command -v realpath >/dev/null 2>&1; then
+                    ROOT_PARAM_RESULT="$(realpath "/dev/disk/by-uuid/${uuid}")"
+                else
+                    ROOT_PARAM_RESULT="$(readlink -f "/dev/disk/by-uuid/${uuid}")"
+                fi
+            fi
+            ;;
+        /dev/*)
+            log "root= references explicit device ${ROOT_PARAM}"
+            ROOT_PARAM_RESULT="$ROOT_PARAM"
+            ;;
+    esac
+}
+
+resolve_root_device() {
+    if [ -n "$ROOTFS_DEVICE" ]; then
+        log "using dstack.rootfs_device=${ROOTFS_DEVICE}"
+        ROOT_DEVICE_RESULT="$ROOTFS_DEVICE"
+        return
+    fi
+
+    resolve_root_from_param
+    if [ -n "$ROOT_PARAM_RESULT" ]; then
+        log "determined root device via kernel parameter: ${ROOT_PARAM_RESULT}"
+        ROOT_DEVICE_RESULT="$ROOT_PARAM_RESULT"
+        return
+    fi
+
+    if [ -e /dev/disk/by-partlabel/dstack-rootfs ]; then
+        log "using /dev/disk/by-partlabel/dstack-rootfs"
+        if command -v realpath >/dev/null 2>&1; then
+            ROOT_DEVICE_RESULT="$(realpath /dev/disk/by-partlabel/dstack-rootfs)"
+        else
+            ROOT_DEVICE_RESULT="$(readlink -f /dev/disk/by-partlabel/dstack-rootfs)"
+        fi
+        [ -n "$ROOT_DEVICE_RESULT" ] || ROOT_DEVICE_RESULT="/dev/disk/by-partlabel/dstack-rootfs"
+        return
+    fi
+
+    if find_largest_nvme_partition; then
+        ROOT_DEVICE_RESULT="$DEVICE_RESULT"
+        return
+    fi
+
+    for candidate in /dev/nvme*n1p*; do
+        if [ -b "$candidate" ]; then
+            log "falling back to first NVMe candidate ${candidate}"
+            ROOT_DEVICE_RESULT="$candidate"
+            return
+        fi
+    done
+
+    if [ -b /dev/vda ]; then
+        log "falling back to /dev/vda"
+        ROOT_DEVICE_RESULT="/dev/vda"
+        return
+    fi
+
+    first_disk=$(ls /dev/sd? 2>/dev/null | head -n1)
+    if [ -n "$first_disk" ]; then
+        log "falling back to ${first_disk}"
+        ROOT_DEVICE_RESULT="$first_disk"
+        return
+    fi
+
+    log "unable to determine root device from available heuristics"
+    ROOT_DEVICE_RESULT=""
+}
+
+main() {
+    export PATH=/sbin:/bin:/usr/sbin:/usr/bin
+
+    mkdir -p /proc
+    mkdir -p /sys
+    mkdir -p /run
+    mount -t proc proc /proc
+    mount -t sysfs sysfs /sys
+    mount -t tmpfs tmpfs /run
+
+    mkdir -p /dev
+    mount -t devtmpfs devtmpfs /dev
+
+    mkdir -p /dev/pts
+
+    attach_console
+
+    log "booting dstack initramfs"
+
+    if [ -w /proc/sys/kernel/panic ]; then
+        log "disabling automatic panic reboot"
+        printf '0' > /proc/sys/kernel/panic
+    fi
+    if [ -w /proc/sys/kernel/panic_on_oops ]; then
+        log "disabling panic on oops"
+        printf '0' > /proc/sys/kernel/panic_on_oops
+    fi
+
+    ROOTFS_DEVICE=""
+    ROOT_PARAM=""
+    DEBUG_SHELL_CANON=""
+    ROOT_PARAM_RESULT=""
+    DEVICE_RESULT=""
+    ROOT_DEVICE_RESULT=""
+    for param in $(cat /proc/cmdline); do
+        case "$param" in
+            "root="*)
+                ROOT_PARAM="${param#*=}"
+                ;;
+            "dstack.rootfs_hash="*)
+                ROOT_HASH="${param#*=}"
+                ;;
+            "dstack.rootfs_size="*)
+                DATA_SIZE="${param#*=}"
+                ;;
+            "dstack.rootfs_device="*)
+                ROOTFS_DEVICE="${param#*=}"
+                ;;
+            "dstack.debug_shell="*)
+                DEBUG_SHELL="${param#*=}"
+                ;;
+            *)
+                ;;
+        esac
+    done
+
+    log "kernel cmdline: $(cat /proc/cmdline)"
+    log "detected params: root=${ROOT_PARAM:-<unset>} hash=${ROOT_HASH:-<unset>} size=${DATA_SIZE:-<unset>} override_device=${ROOTFS_DEVICE:-<unset>}"
+    if [ -n "${DEBUG_SHELL:-}" ]; then
+        DEBUG_SHELL_RAW="${DEBUG_SHELL}"
+        DEBUG_SHELL=$(printf '%s' "${DEBUG_SHELL_RAW}" | tr -d '\r')
+        DEBUG_SHELL_CANON=$(printf '%s' "${DEBUG_SHELL}" | tr '[:upper:]' '[:lower:]')
+        log "debug shell flag: ${DEBUG_SHELL:-<unset>}"
+        log "debug shell flag (hex): $(printf '%s' "${DEBUG_SHELL_RAW}" | od -An -t x1 | tr -d ' \n')"
+        log "debug shell canonical: ${DEBUG_SHELL_CANON:-<unset>}"
+        if [ -n "${DEBUG_SHELL_CANON}" ]; then
+            log "debug shell canonical (hex): $(printf '%s' "${DEBUG_SHELL_CANON}" | od -An -t x1 | tr -d ' \n')"
+            log "debug shell canonical length: $(printf '%s' "${DEBUG_SHELL_CANON}" | wc -c | tr -d ' ')"
+        fi
+    else
+        log "debug shell flag: <unset>"
+    fi
+
+    dump_block_devices
+
+    if [ "${DEBUG_SHELL_CANON:-}" = "stage0" ]; then
+        log "stage0 debug requested; enter shell before verity (touch /run/dstack-stage0-continue to resume)"
+        while [ ! -f /run/dstack-stage0-continue ]; do
+            /bin/sh -i </dev/console >/dev/console 2>&1 || true
+            log "waiting for /run/dstack-stage0-continue..."
+        done
+        rm -f /run/dstack-stage0-continue
+        log "continuing boot after stage0 shell"
+        DEBUG_SHELL_CANON=""
+    fi
+
+    resolve_root_device
+    ROOT_DEV="$ROOT_DEVICE_RESULT"
+    if [ -z "$ROOT_DEV" ]; then
+        log "failed to determine root device; dropping to shell"
+        exec /bin/sh -i </dev/console >/dev/console 2>&1
+    fi
+    log "resolved root device: ${ROOT_DEV}"
+
+    if command -v blockdev >/dev/null 2>&1; then
+        raw_size=$(blockdev --getsize64 "${ROOT_DEV}" 2>/dev/null || echo "error")
+        raw_sectors=$(blockdev --getsz "${ROOT_DEV}" 2>/dev/null || echo "error")
+        log "blockdev --getsize64 ${ROOT_DEV} => ${raw_size}"
+        log "blockdev --getsz ${ROOT_DEV} => ${raw_sectors}"
+    fi
+
+    dev_name=$(basename "${ROOT_DEV}")
+    if [ -n "$dev_name" ] && [ -e "/sys/class/block/${dev_name}" ]; then
+        sys_path=$(readlink -f "/sys/class/block/${dev_name}")
+        queue_dir="${sys_path}/queue"
+        if [ ! -d "$queue_dir" ]; then
+            parent_dir=$(dirname "$sys_path")
+            queue_dir="${parent_dir}/queue"
+        fi
+        if [ -d "$queue_dir" ]; then
+            log "sysfs queue info for ${dev_name}:"
+            for attr in logical_block_size physical_block_size minimum_io_size optimal_io_size; do
+                if [ -f "${queue_dir}/${attr}" ]; then
+                    value=$(cat "${queue_dir}/${attr}" 2>/dev/null)
+                    log "  ${attr}=${value}"
+                fi
+            done
+        fi
+    fi
+
+    ROOT_DIR=/root
+    STAGE1_SENTINEL="/run/dstack-debug-shell-stage1"
+
+    log "setting up verity device with root=${ROOT_DEV} hash=${ROOT_HASH:-<unset>} data_size=${DATA_SIZE:-<unset>}"
+
+    sleep 2
+
+    if [ -z "${ROOT_HASH}" ] || [ -z "${DATA_SIZE}" ]; then
+        log "missing dm-verity parameters; refusing to continue"
+        exec /bin/sh -i </dev/console >/dev/console 2>&1
+    fi
+
+    verity_log=$(veritysetup --debug open "${ROOT_DEV}" rootfs "${ROOT_DEV}" "${ROOT_HASH}" --hash-offset="${DATA_SIZE}" 2>&1)
+    verity_status=$?
+    if [ $verity_status -ne 0 ]; then
+        log "veritysetup failed (status ${verity_status})"
+        printf '%s\n' "${verity_log}" | while IFS= read -r line; do
+            log "  ${line}"
+        done
+        exec /bin/sh -i </dev/console >/dev/console 2>&1
+    fi
+    log "veritysetup open succeeded"
+
+    if [ -d /dev/mapper ]; then
+        for mapper_entry in /dev/mapper/*; do
+            [ -e "$mapper_entry" ] || continue
+            mapper_target=$(readlink -f "$mapper_entry" 2>/dev/null || echo "<unknown>")
+            log "mapper entry: ${mapper_entry} -> ${mapper_target}"
+        done
+    fi
+
+    if command -v blkid >/dev/null 2>&1; then
+        log "blkid present but skipped in Stage0 (run manually from debug shell if needed)"
+    else
+        log "blkid unavailable in initramfs"
+    fi
+
+    pre_mounts=$(cat /proc/self/mounts 2>/dev/null | tr '\n' ';' 2>/dev/null || echo "<unavailable>")
+    log "mount table prior to rootfs mount: ${pre_mounts}"
+
+    if [ "${DEBUG_SHELL_CANON:-}" = "stage1" ]; then
+        while [ ! -f /run/dstack-stage1-continue ]; do
+            log "stage1 debug requested; interactive shell before verity probes (create /run/dstack-stage1-continue to proceed)"
+            /bin/sh -i </dev/console >/dev/console 2>&1
+        done
+        log "detected /run/dstack-stage1-continue; continuing with verity probes"
+        rm -f /run/dstack-stage1-continue
+    fi
+
+    if ! test_device_read "${ROOT_DEV}" "rootfs partition"; then
+        log "warning: dd probe for ${ROOT_DEV} failed"
+    fi
+    if ! test_device_read "/dev/mapper/rootfs" "verity mapping"; then
+        log "warning: dd probe for verity mapping failed"
+    fi
+
+    if [ "${DEBUG_SHELL_CANON:-}" = "stage1" ]; then
+        while [ ! -f /run/dstack-stage1-continue ]; do
+            log "stage1 debug requested; interactive shell before rootfs mount (create /run/dstack-stage1-continue to proceed)"
+            /bin/sh -i </dev/console >/dev/console 2>&1
+        done
+        log "detected /run/dstack-stage1-continue; proceeding with rootfs mount"
+        rm -f /run/dstack-stage1-continue
+    fi
+
+    log "mounting verified rootfs from /dev/mapper/rootfs"
+    if command -v timeout >/dev/null 2>&1; then
+        log "mount helper: using timeout -k 5 30 to guard squashfs mount"
+        set +e
+        timeout -k 5 30 mount -t squashfs /dev/mapper/rootfs ${ROOT_DIR}
+        mount_status=$?
+        set -e
+    else
+        set +e
+        mount -t squashfs /dev/mapper/rootfs ${ROOT_DIR}
+        mount_status=$?
+        set -e
+    fi
+
+    if [ ${mount_status} -eq 0 ]; then
+        log "rootfs mount succeeded"
+    else
+        log "rootfs mount returned status ${mount_status}"
+        if command -v dmesg >/dev/null 2>&1; then
+            dmesg | tail -n 20 | while IFS= read -r line; do
+                log "dmesg tail: ${line}"
+            done
+        fi
+        if [ -d /dev/mapper ]; then
+            for mapper_entry in /dev/mapper/*; do
+                [ -e "$mapper_entry" ] || continue
+                mapper_target=$(readlink -f "$mapper_entry" 2>/dev/null || echo "<unknown>")
+                log "mapper entry (post-mount): ${mapper_entry} -> ${mapper_target}"
+            done
+        fi
+        log "falling back to debug shell for investigation"
+        exec /bin/sh -i </dev/console >/dev/console 2>&1
+    fi
+
+    post_mounts=$(cat /proc/self/mounts 2>/dev/null | tr '\n' ';' 2>/dev/null || echo "<unavailable>")
+    log "mount table after rootfs mount: ${post_mounts}"
+
+    if [ -f "${STAGE1_SENTINEL}" ]; then
+        log "stage1 sentinel present; optional Stage0 shell before pivot (exit to continue)"
+        /bin/sh -i </dev/console >/dev/console 2>&1
+        log "resuming Stage0 after interactive shell"
+    fi
+
+    log "debug shell post-mount value: ${DEBUG_SHELL_CANON:-<unset>}"
+    if [ -n "${DEBUG_SHELL_CANON}" ]; then
+        case "${DEBUG_SHELL_CANON}" in
+            0|false|no)
+                log "debug shell disabled via dstack.debug_shell=${DEBUG_SHELL_CANON}"
+                ;;
+            stage0)
+                log "debug shell stage0 requested; dropping into shell"
+                if [ -d "${ROOT_DIR}" ]; then
+                    for entry in "${ROOT_DIR}"/*; do
+                        log "rootfs entry: $(basename "$entry")"
+                    done
+                    if [ -e "${ROOT_DIR}/sbin/init" ]; then
+                        log "found /sbin/init in rootfs"
+                    else
+                        log "missing /sbin/init in rootfs"
+                    fi
+                else
+                    log "warning: root directory ${ROOT_DIR} missing"
+                fi
+                exec /bin/sh -i </dev/console >/dev/console 2>&1
+                ;;
+            stage1)
+                log "debug shell stage1 requested; creating sentinel ${STAGE1_SENTINEL}"
+                rm -f "${STAGE1_SENTINEL}"
+                : >"${STAGE1_SENTINEL}"
+                log "debug shell sentinel created; continuing boot"
+                ;;
+            *)
+                log "unrecognized debug shell value=${DEBUG_SHELL_CANON}; defaulting to stage0 shell"
+                exec /bin/sh -i </dev/console >/dev/console 2>&1
+                ;;
+        esac
+    fi
+    log "debug shell handling complete; preparing environment for systemd"
+
+    export SYSTEMD_LOG_LEVEL=debug
+    export SYSTEMD_LOG_TARGET=console
+    log "exported SYSTEMD_LOG_LEVEL=${SYSTEMD_LOG_LEVEL} SYSTEMD_LOG_TARGET=${SYSTEMD_LOG_TARGET}"
+
+    mount_move_all sys proc dev run
+
+    log "invoking switch_root to ${ROOT_DIR} with init=/sbin/init"
+    if ! switch_root ${ROOT_DIR} /sbin/init; then
+        status=$?
+        log "switch_root failed with status ${status}"
+        if [ -d "${ROOT_DIR}" ]; then
+            log "root directory ${ROOT_DIR} contents:"
+            for entry in "${ROOT_DIR}"/*; do
+                log "  $(basename "$entry")"
+            done
+        else
+            log "root directory ${ROOT_DIR} is missing"
+        fi
+        exec /bin/sh -i </dev/console >/dev/console 2>&1
+    fi
+}
+
+main "$@"

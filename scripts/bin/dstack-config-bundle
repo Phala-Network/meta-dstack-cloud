@@ -1,0 +1,178 @@
+#!/usr/bin/env python3
+"""Create a configuration bundle for remote dstack guests."""
+
+import argparse
+import hashlib
+import json
+import sys
+from pathlib import Path
+import tarfile
+
+
+def compute_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as fh:
+        for chunk in iter(lambda: fh.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def sanitize_tarinfo(tarinfo: tarfile.TarInfo) -> tarfile.TarInfo:
+    tarinfo.uid = 0
+    tarinfo.gid = 0
+    tarinfo.uname = ""
+    tarinfo.gname = ""
+    tarinfo.mtime = 0
+    if tarinfo.isfile():
+        tarinfo.mode = 0o600
+    return tarinfo
+
+
+def collect_files(shared_dir: Path, output_path: Path) -> list[Path]:
+    files = []
+    for entry in sorted(shared_dir.iterdir()):
+        if entry.name.startswith(".") and entry.name in {".", ".."}:
+            continue
+        if entry.is_symlink():
+            raise ValueError(f"Refusing to pack symlink {entry}")
+        if entry.is_dir():
+            raise ValueError(f"Refusing to pack directory {entry}; bundle only supports files")
+        if not entry.is_file():
+            continue
+        if entry.resolve() == output_path.resolve():
+            continue
+        files.append(entry)
+    if not files:
+        raise ValueError("No files found in shared directory")
+    return files
+
+
+def build_bundle(shared_dir: Path, output: Path, compress: bool) -> tuple[list[str], int]:
+    shared_dir = shared_dir.resolve()
+    output = output.resolve()
+    files = collect_files(shared_dir, output)
+
+    output.parent.mkdir(parents=True, exist_ok=True)
+
+    mode = "w:gz" if compress else "w"
+    open_kwargs: dict[str, object] = {}
+    if compress:
+        open_kwargs["compresslevel"] = 9
+    with tarfile.open(output, mode, **open_kwargs) as tar:
+        for src in files:
+            tar.add(src, arcname=src.name, recursive=False, filter=sanitize_tarinfo)
+
+    size = output.stat().st_size
+    return [f.name for f in files], size
+
+
+def guess_compression(path: Path, compress_flag: bool | None) -> bool:
+    if compress_flag is not None:
+        return compress_flag
+    suffix = "".join(path.suffixes[-2:]) if len(path.suffixes) >= 2 else path.suffix
+    if suffix in (".tgz", ".tar.gz"):
+        return True
+    if path.suffix == ".gz":
+        return True
+    return False
+
+
+def default_output(shared_dir: Path) -> Path:
+    bundle_name = "config-bundle.tar"
+    return shared_dir.parent / bundle_name
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("shared_dir", type=Path, help="Path to the VM's shared directory")
+    parser.add_argument(
+        "--output",
+        "-o",
+        type=Path,
+        help="Where to write the bundle (default: ../config-bundle.tar)",
+    )
+    parser.add_argument(
+        "--manifest",
+        type=Path,
+        help="Write a JSON manifest alongside the bundle",
+    )
+    parser.add_argument(
+        "--digest-file",
+        type=Path,
+        help="Write the bundle SHA-256 hash to this file",
+    )
+    parser.add_argument(
+        "--compress",
+        dest="compress",
+        action="store_true",
+        help="Force gzip compression",
+    )
+    parser.add_argument(
+        "--no-compress",
+        dest="compress",
+        action="store_false",
+        help="Force no compression",
+    )
+    parser.set_defaults(compress=None)
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Overwrite existing bundle or manifest files",
+    )
+    return parser.parse_args()
+
+
+def ensure_path_available(path: Path, force: bool) -> None:
+    if not path.exists():
+        return
+    if force:
+        return
+    raise FileExistsError(f"Refusing to overwrite existing file: {path}")
+
+
+def main() -> int:
+    args = parse_args()
+
+    shared_dir = args.shared_dir
+    if not shared_dir.is_dir():
+        print(f"error: {shared_dir} is not a directory", file=sys.stderr)
+        return 1
+
+    output = args.output or default_output(shared_dir)
+    compress = guess_compression(output, args.compress)
+    ensure_path_available(output, args.force)
+
+    try:
+        file_names, size = build_bundle(shared_dir, output, compress)
+    except Exception as exc:  # noqa: BLE001
+        if output.exists():
+            output.unlink(missing_ok=True)
+        print(f"error: failed to build bundle: {exc}", file=sys.stderr)
+        return 1
+
+    checksum = compute_sha256(output)
+
+    if args.digest_file:
+        ensure_path_available(args.digest_file, args.force)
+        args.digest_file.write_text(checksum + "\n", encoding="utf-8")
+
+    if args.manifest:
+        ensure_path_available(args.manifest, args.force)
+        manifest = {
+            "version": 1,
+            "bundle": output.name,
+            "path": str(output),
+            "sha256": checksum,
+            "size": size,
+            "compression": "gzip" if compress else "none",
+            "files": file_names,
+        }
+        args.manifest.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+
+    print(f"Wrote {output} ({size} bytes)")
+    print(f"SHA-256: {checksum}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

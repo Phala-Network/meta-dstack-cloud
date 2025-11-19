@@ -1,0 +1,44 @@
+From 9fb86a0f7fba38a72b40272d6d7e0d4c1ce46629 Mon Sep 17 00:00:00 2001
+From: Codex Agent <codex@example.com>
+Date: Sun, 16 Nov 2025 10:40:00 +0000
+Subject: [PATCH] IntelTdx/Sec: include PeiServicesLib for constructor helper
+
+The Intel TDX SEC entry point calls ProcessLibraryConstructorList(), but
+AutoGen.h does not emit a prototype for that helper. GCC therefore treats
+it as implicitly declared and, because -Werror=implicit-function-declaration
+is in use, the build stops. Pull in PeiServicesLib and add a forward
+prototype to keep the compiler happy.
+
+Upstream-Status: Pending
+
+Signed-off-by: Codex Agent <codex@example.com>
+---
+ OvmfPkg/IntelTdx/Sec/SecMain.c | 7 +++++++
+ 1 file changed, 7 insertions(+)
+
+diff --git a/OvmfPkg/IntelTdx/Sec/SecMain.c b/OvmfPkg/IntelTdx/Sec/SecMain.c
+index a5a8ce6743..f1fed84985 100644
+--- a/OvmfPkg/IntelTdx/Sec/SecMain.c
++++ b/OvmfPkg/IntelTdx/Sec/SecMain.c
+@@ -26,6 +26,7 @@
+ #include <Library/TdxHelperLib.h>
+ #include <Library/CcProbeLib.h>
+ #include <Library/PeilessStartupLib.h>
++#include <Library/PeiServicesLib.h>
+ #include <Register/Intel/ArchitecturalMsr.h>
+ #include <Register/Intel/Cpuid.h>
+ 
+@@ -36,6 +37,13 @@
+   IA32_IDT_GATE_DESCRIPTOR    IdtTable[SEC_IDT_ENTRY_COUNT];
+ } SEC_IDT_TABLE;
+ 
++VOID
++EFIAPI
++ProcessLibraryConstructorList (
++  VOID
++  );
++
++
+ //
+ // Template of an IDT entry pointing to 10:FFFFFFE4h.
+ //
