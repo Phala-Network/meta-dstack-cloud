@@ -6,6 +6,13 @@ This project implements Yocto layer and the overall build scripts for DStack Bas
 
 See https://github.com/Dstack-TEE/dstack for more details.
 
+## Runtime Kernel Parameters
+
+The guest initramfs recognises a few `dstack.*` kernel cmdline parameters to drive early boot:
+
+- `dstack.rootfs_hash` and `dstack.rootfs_size` are required to unlock the dm-verity protected squashfs rootfs.
+- `dstack.rootfs_device` (optional) overrides the default `/dev/vda` block device that stores the verity data and hash. Set this when the root filesystem lives on a different disk or naming scheme (for example `/dev/sdb`, `PARTLABEL=dstack-rootfs`).
+
 ## Reproducible Build The Guest Image
 
 ### Pre-requisites
