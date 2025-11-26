@@ -56,6 +56,7 @@ do_install() {
     install -m 0755 ${CARGO_BINDIR}/dstack-guest-agent ${D}${bindir}
     install -m 0755 ${S}/basefiles/dstack-prepare.sh ${D}${bindir}
     install -m 0755 ${S}/basefiles/wg-checker.sh ${D}${bindir}
+    install -m 0755 ${S}/basefiles/mount-etc-overlay.sh ${D}${bindir}
     install -m 0755 ${S}/basefiles/app-compose.sh ${D}${bindir}
     install -m 0755 ${S}/docker-daemon.json ${D}${sysconfdir}/docker/daemon.json
     install -m 0644 ${S}/basefiles/journald.conf ${D}${sysconfdir}/systemd/journald.conf.d/dstack.conf
