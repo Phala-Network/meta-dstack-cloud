@@ -33,6 +33,7 @@ IMAGE_INSTALL = "\
     e2fsprogs-resize2fs \
     gptfdisk \
     parted \
+    tpm2-tools \
 "
 
 IMAGE_NAME_SUFFIX ?= ""
