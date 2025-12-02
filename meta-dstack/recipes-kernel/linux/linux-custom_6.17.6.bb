@@ -1,5 +1,5 @@
-SUMMARY = "DStack Linux kernel 6.17.6 built from tarball"
-DESCRIPTION = "Custom DStack kernel based on upstream Linux 6.17.6 with tiny Kconfig baseline tuned for TDX guests"
+SUMMARY = "dstack Linux kernel 6.17.6 built from tarball"
+DESCRIPTION = "Custom dstack kernel based on upstream Linux 6.17.6 with tiny Kconfig baseline tuned for TDX guests"
 SECTION = "kernel"
 LICENSE = "GPL-2.0-only"
 LIC_FILES_CHKSUM = "file://COPYING;md5=6bc538ed5bd9a7fc9398086aedcd7e46"
