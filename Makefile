@@ -20,7 +20,7 @@ dist: images
 	$(foreach dist_name,${DIST_NAMES},./mkimage.sh --dist-name $(dist_name);)
 
 images:
-	bitbake virtual/kernel dstack-initramfs dstack-ovmf $(ROOTFS_IMAGE_NAMES)
+	bitbake virtual/kernel dstack-initramfs dstack-ovmf dstack-uki $(ROOTFS_IMAGE_NAMES)
 
 clean:
 	bitbake -c cleansstate virtual/kernel dstack-initramfs dstack-ovmf $(ROOTFS_IMAGE_NAMES)

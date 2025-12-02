@@ -42,6 +42,7 @@ INITRAMFS_IMAGE=${IMG_DIR}/dstack-initramfs.cpio.gz
 ROOTFS_IMAGE=${IMG_DIR}/${ROOTFS_IMAGE_NAME}-tdx.squashfs.verity
 KERNEL_IMAGE=${IMG_DIR}/bzImage
 OVMF_FIRMWARE=${IMG_DIR}/ovmf.fd
+UKI_IMAGE=${IMG_DIR}/dstack-uki.efi
 # Always use the work-shared directory which has the correct verity env
 VERITY_ENV_FILE=${BB_BUILD_DIR}/tmp/work-shared/tdx/dm-verity/${ROOTFS_IMAGE_NAME}.squashfs.verity.env
 echo "Loading verity env from ${VERITY_ENV_FILE}"
@@ -62,33 +63,55 @@ align_up() {
     echo $(( ( (value + align - 1) / align ) * align ))
 }
 
-create_grub_bootstrap() {
-    local target_dir="$1"
-    local cfg_file
-    cfg_file=$(mktemp)
-cat <<EOF > "$cfg_file"
-set default=0
-set timeout=0
-serial --unit=0 --speed=115200 --word=8 --parity=no --stop=1
-terminal_input serial console
-terminal_output serial console
+build_uki() {
+    local output_file="$1"
+    local stub="${IMG_DIR}/linuxx64.efi.stub"
+    local kernel="$KERNEL_IMAGE"
+    local initrd="$INITRAMFS_IMAGE"
 
-menuentry "DStack Guest" {
-    search --file --no-floppy --set=root /bzImage
-    linux /bzImage $KARG0 $KARG1 $KARG2
-    initrd /initramfs.cpio.gz
+    if [[ ! -f "$stub" ]]; then
+        echo "Error: EFI stub not found: $stub" >&2
+        return 1
+    fi
+
+    local cmdline="$KARG0 $KARG1 $KARG2"
+    echo "Building UKI with cmdline: $cmdline"
+
+    # Find ukify from native sysroot or system
+    local ukify_bin=""
+    local native_sysroot="${BB_BUILD_DIR}/tmp/sysroots-components/x86_64/systemd-boot-native/usr/bin/ukify"
+    if [[ -x "$native_sysroot" ]]; then
+        ukify_bin="$native_sysroot"
+    elif command -v ukify &>/dev/null; then
+        ukify_bin="ukify"
+    else
+        echo "Error: ukify not found" >&2
+        return 1
+    fi
+
+    # ukify requires pefile python module
+    local python_sitepackages="${BB_BUILD_DIR}/tmp/sysroots-components/x86_64/python3-pefile-native/usr/lib/python3.13/site-packages"
+    export PYTHONPATH="${python_sitepackages}:${PYTHONPATH:-}"
+
+    "$ukify_bin" build \
+        --efi-arch x64 \
+        --stub "$stub" \
+        --linux="$kernel" \
+        --initrd="$initrd" \
+        --cmdline="$cmdline" \
+        --output="$output_file"
 }
-EOF
+
+create_uki_bootstrap() {
+    local target_dir="$1"
     mkdir -p "$target_dir/EFI/BOOT"
-    grub-mkstandalone \
-        --disable-shim-lock \
-        --modules="normal linux part_gpt fat search serial configfile" \
-        -O x86_64-efi \
-        -o "$target_dir/EFI/BOOT/BOOTX64.EFI" \
-        "boot/grub/grub.cfg=$cfg_file"
-    rm -f "$cfg_file"
-    cp "$KERNEL_IMAGE" "$target_dir/bzImage"
-    cp "$INITRAMFS_IMAGE" "$target_dir/initramfs.cpio.gz"
+
+    local uki_file="${OUTPUT_DIR}/dstack-uki.efi"
+    if [[ ! -f "$uki_file" ]]; then
+        echo "Building UKI for this distribution..."
+        build_uki "$uki_file"
+    fi
+    cp "$uki_file" "$target_dir/EFI/BOOT/BOOTX64.EFI"
 }
 
 create_partitioned_rootfs() {
@@ -160,8 +183,8 @@ create_gcp_artifacts() {
     local gcp_dir="${OUTPUT_DIR}/gcp"
     local boot_src="${gcp_dir}/efi-root"
     mkdir -p "$boot_src"
-    echo "Generating GRUB EFI loader for GCP at ${boot_src}"
-    create_grub_bootstrap "$boot_src"
+    echo "Installing UKI as EFI bootloader at ${boot_src}"
+    create_uki_bootstrap "$boot_src"
 
     local disk_img="${gcp_dir}/disk.raw"
     echo "Building raw disk image for GCP at ${disk_img}"
@@ -212,13 +235,15 @@ sha256sum sha256sum.txt | awk '{print $1}' > digest.txt
 popd
 
 if [ "$ENABLE_GCP_IMAGE" = "1" ]; then
-    if command -v grub-mkstandalone >/dev/null && \
-       command -v sgdisk >/dev/null && \
-       command -v mkfs.vfat >/dev/null && \
-        command -v mcopy >/dev/null; then
+    if [[ ! -f "$UKI_IMAGE" ]]; then
+        echo "Skipping GCP disk image creation because UKI image not found: $UKI_IMAGE" >&2
+        echo "Run 'bitbake dstack-uki' to build the UKI first" >&2
+    elif command -v sgdisk >/dev/null && \
+         command -v mkfs.vfat >/dev/null && \
+         command -v mcopy >/dev/null; then
         create_gcp_artifacts
     else
-        echo "Skipping GCP disk image creation because grub-mkstandalone/sgdisk/mtools are missing" >&2
+        echo "Skipping GCP disk image creation because sgdisk/mtools are missing" >&2
     fi
 fi
 
