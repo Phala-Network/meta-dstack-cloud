@@ -1,0 +1,17 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"type": "cargo",
+			"command": "clippy",
+			"options": {
+				"cwd": "${workspaceFolder}/dstack"
+			},
+			"problemMatcher": [
+				"$rustc"
+			],
+			"group": "build",
+			"label": "rust: cargo clippy"
+		}
+	]
+}

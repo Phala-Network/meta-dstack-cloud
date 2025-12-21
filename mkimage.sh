@@ -52,6 +52,8 @@ DSTACK_VERSION=$(bitbake-getvar --value DISTRO_VERSION | tail -1)
 OUTPUT_DIR=${OUTPUT_DIR:-"${DIST_DIR}/${DIST_NAME}-${DSTACK_VERSION}"}
 IMAGE_TAR=${IMAGE_TAR:-"${DIST_DIR}/${DIST_NAME}-${DSTACK_VERSION}.tar.gz"}
 
+AUTHENTICODE_HASH_SCRIPT="${BB_BUILD_DIR}/../scripts/bin/authenticode_hash.py"
+
 verbose() {
     echo "$@"
     $@
@@ -63,55 +65,57 @@ align_up() {
     echo $(( ( (value + align - 1) / align ) * align ))
 }
 
-build_uki() {
-    local output_file="$1"
-    local stub="${IMG_DIR}/linuxx64.efi.stub"
-    local kernel="$KERNEL_IMAGE"
-    local initrd="$INITRAMFS_IMAGE"
+calc_authenticode_hash() {
+    local file="$1"
 
-    if [[ ! -f "$stub" ]]; then
-        echo "Error: EFI stub not found: $stub" >&2
-        return 1
+    if [[ ! -f "$AUTHENTICODE_HASH_SCRIPT" ]] || ! command -v python3 &>/dev/null; then
+        return 0
     fi
 
-    local cmdline="$KARG0 $KARG1 $KARG2"
-    echo "Building UKI with cmdline: $cmdline"
+    python3 "$AUTHENTICODE_HASH_SCRIPT" "$file" 2>/dev/null || true
+}
 
-    # Find ukify from native sysroot or system
-    local ukify_bin=""
-    local native_sysroot="${BB_BUILD_DIR}/tmp/sysroots-components/x86_64/systemd-boot-native/usr/bin/ukify"
-    if [[ -x "$native_sysroot" ]]; then
-        ukify_bin="$native_sysroot"
-    elif command -v ukify &>/dev/null; then
-        ukify_bin="ukify"
+write_authenticode_hash_if_missing() {
+    local file="$1"
+    local out_file="${file}.auth_hash.txt"
+
+    if [[ -f "$out_file" ]]; then
+        return 0
+    fi
+
+    if [[ ! -f "$file" ]]; then
+        return 0
+    fi
+
+    if [[ ! -f "$AUTHENTICODE_HASH_SCRIPT" ]] || ! command -v python3 &>/dev/null; then
+        echo "Warning: authenticode_hash.py not found or python3 not available, skipping Authenticode hash calculation" >&2
+        return 0
+    fi
+
+    echo "Calculating UKI Authenticode hash..."
+    local auth_hash
+    auth_hash=$(calc_authenticode_hash "$file")
+    if [[ -n "$auth_hash" ]]; then
+        echo "$auth_hash" > "$out_file"
+        echo "UKI Authenticode hash: $auth_hash"
     else
-        echo "Error: ukify not found" >&2
-        return 1
+        echo "Warning: Failed to calculate UKI Authenticode hash" >&2
     fi
-
-    # ukify requires pefile python module
-    local python_sitepackages="${BB_BUILD_DIR}/tmp/sysroots-components/x86_64/python3-pefile-native/usr/lib/python3.13/site-packages"
-    export PYTHONPATH="${python_sitepackages}:${PYTHONPATH:-}"
-
-    "$ukify_bin" build \
-        --efi-arch x64 \
-        --stub "$stub" \
-        --linux="$kernel" \
-        --initrd="$initrd" \
-        --cmdline="$cmdline" \
-        --output="$output_file"
 }
 
 create_uki_bootstrap() {
     local target_dir="$1"
     mkdir -p "$target_dir/EFI/BOOT"
 
-    local uki_file="${OUTPUT_DIR}/dstack-uki.efi"
+    local uki_file="${UKI_IMAGE}"
     if [[ ! -f "$uki_file" ]]; then
-        echo "Building UKI for this distribution..."
-        build_uki "$uki_file"
+        echo "Error: UKI image not found: $uki_file" >&2
+        return 1
     fi
     cp "$uki_file" "$target_dir/EFI/BOOT/BOOTX64.EFI"
+
+    # Calculate Authenticode hash if not already present
+    write_authenticode_hash_if_missing "$uki_file"
 }
 
 create_partitioned_rootfs() {
@@ -204,6 +208,11 @@ $Q cp $KERNEL_IMAGE ${OUTPUT_DIR}/
 $Q cp $OVMF_FIRMWARE ${OUTPUT_DIR}/
 $Q cp $ROOTFS_IMAGE ${OUTPUT_DIR}/rootfs.img.verity
 
+# Copy UKI Authenticode hash if available
+if [[ -f "${UKI_IMAGE}.auth_hash.txt" ]]; then
+    $Q cp "${UKI_IMAGE}.auth_hash.txt" "${OUTPUT_DIR}/dstack-uki.efi.auth_hash.txt"
+fi
+
 echo "Creating partitioned rootfs image at ${OUTPUT_DIR}/rootfs.img.parted.verity"
 create_partitioned_rootfs "${OUTPUT_DIR}/rootfs.img.verity" "${OUTPUT_DIR}/rootfs.img.parted.verity"
 
@@ -243,7 +252,10 @@ if [ "$ENABLE_GCP_IMAGE" = "1" ]; then
          command -v mcopy >/dev/null; then
         create_gcp_artifacts
     else
-        echo "Skipping GCP disk image creation because sgdisk/mtools are missing" >&2
+        echo "Error: cannot create GCP disk image because required tools are missing" >&2
+        echo "Missing tools are among: sgdisk (gdisk), mkfs.vfat (dosfstools), mcopy (mtools)" >&2
+        echo "Install them (e.g. apt-get install -y gdisk dosfstools mtools) or set ENABLE_GCP_IMAGE=0" >&2
+        exit 1
     fi
 fi
 

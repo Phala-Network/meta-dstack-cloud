@@ -1,0 +1,36 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(../build.sh guest)",
+      "Bash(cat:*)",
+      "Bash(grep:*)",
+      "Bash(mkdir:*)",
+      "Bash(bitbake:*)",
+      "Bash(source:*)",
+      "Bash(ldd:*)",
+      "Bash(nm:*)",
+      "Bash(git ls-remote:*)",
+      "Bash(cargo check:*)",
+      "Bash(cargo test:*)",
+      "Bash(cargo build:*)",
+      "Bash(apt list:*)",
+      "Bash(dpkg:*)",
+      "Bash(GCP_IMAGE=\"dstack-0.6.0-gcp.tar.gz\")",
+      "Bash(BUCKET=\"gs://wuhan-workshop-dstack\")",
+      "Bash(echo:*)",
+      "Bash(gsutil cp:*)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "WebFetch(domain:github.com)",
+      "WebSearch",
+      "Bash(tmux list-sessions:*)",
+      "Bash(gcloud compute ssh:*)",
+      "Bash(tmux capture-pane:*)",
+      "Bash(tmux list-windows:*)",
+      "Bash(gcloud compute scp:*)",
+      "Bash(gcloud compute instances delete:*)",
+      "Bash(gcloud compute images create:*)",
+      "Bash(gcloud compute instances list:*)"
+    ],
+    "deny": []
+  }
+}
