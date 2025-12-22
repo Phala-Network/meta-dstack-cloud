@@ -19,15 +19,15 @@ PACKAGECONFIG[tpm] = "-D TPM_ENABLE=TRUE,-D TPM_ENABLE=FALSE,,"
 #see https://src.fedoraproject.org/rpms/edk2/blob/rawhide/f/0032-Basetools-turn-off-gcc12-warning.patch
 BUILD_CFLAGS += "-Wno-error=stringop-overflow"
 
-SRC_URI = "gitsm://github.com/tianocore/edk2.git;branch=master;protocol=https \
+SRC_URI = "gitsm://github.com/tianocore/edk2.git;branch=master;protocol=https;tag=${PV} \
            file://0001-Update-path-to-native-BaseTools.patch \
            file://0002-BaseTools-makefile-adjust-to-build-in-under-bitbake.patch \
            file://0003-Debug-prefix-map.patch \
            file://0004-Reproduciable.patch \
            "
 
-PV = "edk2-3a3b12cb"
-SRCREV = "3a3b12cbdae2e89b0e365eb01c378891d0d9037c"
+PV = "edk2-stable202508"
+SRCREV = "d46aa46c8361194521391aa581593e556c707c6e"
 UPSTREAM_CHECK_GITTAGREGEX = "(?P<pver>edk2-stable.*)"
 
 CVE_PRODUCT = "edk2"
@@ -48,7 +48,6 @@ inherit deploy
 
 PARALLEL_MAKE = ""
 
-S = "${WORKDIR}/git"
 
 DEPENDS = "nasm-native acpica-native ovmf-native util-linux-native"
 

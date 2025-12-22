@@ -20,7 +20,7 @@ SRC_URI = "https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-${PV}.tar.xz;downl
 
 SRC_URI[sha256sum] = "8ecfbc6b693448abb46144a8d04d1e1631639c7661c1088425a2e5406f13c69c"
 
-S = "${WORKDIR}/linux-${PV}"
+S = "${UNPACKDIR}/linux-${PV}"
 
 LINUX_VERSION_EXTENSION = "-dstack"
 KERNEL_VERSION_EXTENSION = "-dstack"

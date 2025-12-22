@@ -11,7 +11,7 @@ SRC_DIR = '${REPO_ROOT}/dstack/mod-tdx-guest'
 SRC_URI = 'file://${REPO_ROOT}/dstack/mod-tdx-guest'
 SRCREV = "${DSTACK_SRC_REV}"
 
-S = "${WORKDIR}/${SRC_DIR}"
+S = "${UNPACKDIR}/${SRC_DIR}"
 
 RPROVIDES:${PN} += "tdx-guest-ko"
 INSANE_SKIP:${PN} += "buildpaths"

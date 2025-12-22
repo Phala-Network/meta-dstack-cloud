@@ -37,14 +37,14 @@ if [ ! -f "$BUILD_DIR/conf/local.conf" ]; then
     cp -f "$THIS_DIR/bb-build/conf/local.conf" "$BUILD_DIR/conf/local.conf"
 fi
 
-OE_INIT=$THIS_DIR/poky/oe-init-build-env
+OE_INIT=$THIS_DIR/openembedded-core/oe-init-build-env
 
 for script in $THIS_DIR/setup.d/*.sh; do
     source "$script"
 done
 
-pushd .
-source $OE_INIT $BUILD_DIR
+pushd "$BUILD_DIR"
+BDIR="." TEMPLATECONF=$THIS_DIR/meta-yocto/meta-poky/conf/templates/default source $OE_INIT
 popd
 
 bitbake-layers add-layer $LAYERS
