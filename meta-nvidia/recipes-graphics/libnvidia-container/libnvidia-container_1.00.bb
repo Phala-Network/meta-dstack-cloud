@@ -3,6 +3,16 @@ inherit features_check
 
 SUMMARY = "libNVIDIA Container for Yocto"
 
+fakeroot do_unpack_modprobe() {
+    mkdir -p ${S}/deps/src
+    if [ -d "${UNPACKDIR}/nvidia-modprobe" ]; then
+        mv ${UNPACKDIR}/nvidia-modprobe ${S}/deps/src/nvidia-modprobe-${NVIDIA_MODPROBE_VERSION}
+    fi
+}
+addtask unpack_modprobe after do_unpack before do_patch
+do_unpack_modprobe[dirs] = "${S}"
+do_unpack_modprobe[vardeps] += "NVIDIA_MODPROBE_VERSION"
+
 PACKAGECONFIG ??= "seccomp"
 PACKAGECONFIG[seccomp] = "WITH_SECCOMP=yes,WITH_SECCOMP=no,libseccomp"
 
