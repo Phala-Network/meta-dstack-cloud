@@ -9,7 +9,8 @@ FILES:${PN} = "*"
 
 inherit allarch
 
-S = "${WORKDIR}"
+UNPACKDIR = "${WORKDIR}/sources"
+S = "${UNPACKDIR}"
 
 do_install() {
     install -d ${D}/

@@ -46,7 +46,7 @@ VERITY_ENV_FILE=${BB_BUILD_DIR}/tmp/work-shared/tdx/dm-verity/${ROOTFS_IMAGE_NAM
 echo "Loading verity env from ${VERITY_ENV_FILE}"
 source ${VERITY_ENV_FILE}
 
-DSTACK_VERSION=$(bitbake-getvar --value DISTRO_VERSION)
+DSTACK_VERSION=$(bitbake-getvar --value DISTRO_VERSION | tail -1)
 OUTPUT_DIR=${OUTPUT_DIR:-"${DIST_DIR}/${DIST_NAME}-${DSTACK_VERSION}"}
 IMAGE_TAR=${IMAGE_TAR:-"${DIST_DIR}/${DIST_NAME}-${DSTACK_VERSION}.tar.gz"}
 

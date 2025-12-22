@@ -9,7 +9,7 @@ REPO_ROOT = "${THISDIR}/../../.."
 
 SRC_DIR = '${REPO_ROOT}/dstack'
 
-S = "${WORKDIR}/dstack"
+S = "${UNPACKDIR}/dstack"
 
 RDEPENDS:${PN} += "bash"
 
@@ -83,3 +83,7 @@ do_install() {
 }
 
 FILES:${PN} += "${sysconfdir}/systemd/system/docker.service.d/dstack-guest-agent.conf"
+
+# Cargo embeds build paths into binaries; allow TMPDIR references.
+INSANE_SKIP:${PN} += "buildpaths"
+INSANE_SKIP:${PN}-dbg += "buildpaths"

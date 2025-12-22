@@ -1,6 +1,14 @@
-[submodule "poky"]
-	path = poky
-	url = https://github.com/yoctoproject/poky.git
+[submodule "bitbake"]
+	path = bitbake
+	url = https://git.openembedded.org/bitbake
+[submodule "openembedded-core"]
+	path = openembedded-core
+	url = https://git.openembedded.org/openembedded-core
+	branch = whinlatter
+[submodule "meta-yocto"]
+	path = meta-yocto
+	url = https://git.yoctoproject.org/meta-yocto
+	branch = whinlatter
 [submodule "meta-confidential-compute"]
 	path = meta-confidential-compute
 	url = https://github.com/Dstack-TEE/meta-confidential-compute.git
