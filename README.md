@@ -1,6 +1,6 @@
-# Yocto support for DStack Guest
+# Yocto support for dstack guest OS
 
-This project implements Yocto layer and the overall build scripts for DStack Base OS image.
+This project implements Yocto layer and the overall build scripts for dstack Base OS image.
 
 ## Build
 

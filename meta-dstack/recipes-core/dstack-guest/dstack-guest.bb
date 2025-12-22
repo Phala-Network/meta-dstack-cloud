@@ -1,4 +1,4 @@
-SUMMARY = "Guest binaries for DStack, a decentralized computing stack"
+SUMMARY = "Guest binaries for dstack, a decentralized computing stack"
 DESCRIPTION = "${SUMMARY}"
 LICENSE = "MIT"
 LIC_FILES_CHKSUM = "file://${COREBASE}/meta/COPYING.MIT;md5=3da9cfbcb788c80a0384361b4de20420"
