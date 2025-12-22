@@ -10,4 +10,4 @@ do_install:append() {
 }
 
 RDEPENDS:${PN}:append = " containerd-opencontainers"
-FILES:${PN}:append= "${sysconfdir}/containerd/config.toml"
+FILES:${PN}:append = "${sysconfdir}/containerd/config.toml"

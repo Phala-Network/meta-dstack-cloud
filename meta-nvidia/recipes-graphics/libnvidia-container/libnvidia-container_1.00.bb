@@ -24,7 +24,7 @@ EXTRA_OEMAKE = "EXCLUDE_BUILD_FLAGS=1 PLATFORM=${HOST_ARCH} WITH_NVCGO=yes WITH_
 NVIDIA_MODPROBE_EXTRA_CFLAGS ?= "-ffile-prefix-map=${WORKDIR}=/usr/src/debug/${PN}/${EXTENDPE}${PV}-${PR}"
 CFLAGS:prepend = " -I${RECIPE_SYSROOT_NATIVE}/usr/include/tirpc "
 
-export OBJCPY="${OBJCOPY}"
+export OBJCPY = "${OBJCOPY}"
 GO_IMPORT = "github.com/NVIDIA/nvidia-container-toolkit"
 SECURITY_LDFLAGS = ""
 LDFLAGS += "-Wl,-z,lazy"
