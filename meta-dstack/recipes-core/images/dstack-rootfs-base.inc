@@ -12,7 +12,6 @@ IMAGE_INSTALL = "\
     iptables \
     docker-moby \
     docker-compose \
-    tdx-guest-ko \
     dstack-guest \
     wireguard-tools \
     cryptsetup \
