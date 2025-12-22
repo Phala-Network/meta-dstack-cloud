@@ -66,6 +66,9 @@ FILES:${PN}-dev += "\
     ${prefix}/src/zfs-${PV} \
     ${prefix}/src/spl-${PV} \
 "
+# Skip buildpaths QA check for kernel modules
+INSANE_SKIP:${PN} += "buildpaths"
+
 # Not yet ported to rv32
 COMPATIBLE_HOST:riscv32 = "null"
 # conflicting definition of ABS macro from asm/asm.h from kernel
