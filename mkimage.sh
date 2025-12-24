@@ -194,7 +194,7 @@ create_gcp_artifacts() {
     echo "Building raw disk image for GCP at ${disk_img}"
     build_gcp_disk_image "$disk_img" "$boot_src" "${OUTPUT_DIR}/rootfs.img.verity"
 
-    local tarball="${DIST_DIR}/${DIST_NAME}-${DSTACK_VERSION}-gcp.tar.gz"
+    local tarball="${OUTPUT_DIR}/gcp.tar.gz"
     echo "Archiving GCP disk image to ${tarball}"
     (cd "$gcp_dir" && tar -czvf "$tarball" disk.raw)
 }
