@@ -22,6 +22,10 @@ Usage:
     dstack-cloud start                   # Start a stopped VM
     dstack-cloud remove                  # Remove the VM and cleanup
     dstack-cloud list                    # List all deployments
+    dstack-cloud fw allow <port>         # Allow traffic on a port
+    dstack-cloud fw deny <port>          # Block traffic on a port
+    dstack-cloud fw remove <port>        # Remove a firewall rule
+    dstack-cloud fw list                 # List firewall rules
 """
 
 import argparse
@@ -1216,9 +1220,27 @@ class CloudDeploymentManager:
         logger.info(f"Shared Directory: {shared_dir}")
         logger.info(f"GCS Bucket: {config.bucket}")
 
-        # Delete existing instance if requested
-        if delete_existing:
-            self._delete_instance_if_exists(config)
+        # Check if instance already exists
+        result = self._run_gcloud([
+            "compute", "instances", "describe", config.instance_name,
+            f"--zone={config.zone}",
+            f"--project={config.project}"
+        ], check=False)
+
+        if result.returncode == 0:
+            if delete_existing:
+                logger.info(f"Deleting existing instance: {config.instance_name}")
+                self._run_gcloud([
+                    "compute", "instances", "delete", config.instance_name,
+                    f"--zone={config.zone}",
+                    f"--project={config.project}",
+                    "--quiet"
+                ])
+            else:
+                raise RuntimeError(
+                    f"Instance '{config.instance_name}' already exists. "
+                    f"Use --delete to replace it."
+                )
 
         # Check and upload boot image
         boot_image = self._check_and_upload_boot_image(config, app, force=force_boot_image)
@@ -1294,23 +1316,6 @@ class CloudDeploymentManager:
         logger.info("")
         logger.info("To check serial output:")
         logger.info(f"  dstack-cloud logs")
-
-    def _delete_instance_if_exists(self, config: GcpConfig) -> None:
-        """Delete instance if it exists."""
-        result = self._run_gcloud([
-            "compute", "instances", "describe", config.instance_name,
-            f"--zone={config.zone}",
-            f"--project={config.project}"
-        ], check=False)
-
-        if result.returncode == 0:
-            logger.info(f"Deleting existing instance: {config.instance_name}")
-            self._run_gcloud([
-                "compute", "instances", "delete", config.instance_name,
-                f"--zone={config.zone}",
-                f"--project={config.project}",
-                "--quiet"
-            ])
 
     def _parse_env_file(self, file_path: Path) -> Dict[str, str]:
         """Parse an environment file where each line is formatted as KEY=Value."""
@@ -1698,6 +1703,247 @@ class CloudDeploymentManager:
             "--format=table(name,zone,status,networkInterfaces[0].accessConfigs[0].natIP:label=EXTERNAL_IP,creationTimestamp)"
         ], capture=False)
 
+    def _get_firewall_rule_name(self, instance_name: str, port: int, protocol: str,
+                                 action: str = "allow") -> str:
+        """Generate firewall rule name for an instance port."""
+        return f"{instance_name}-{action}-{protocol}-{port}"
+
+    def _parse_port_spec(self, port_spec: str) -> tuple:
+        """Parse port specification like '8080' or '53/udp'.
+
+        Returns:
+            tuple: (port: int, protocol: str)
+        """
+        if "/" in port_spec:
+            port_str, protocol = port_spec.split("/", 1)
+            protocol = protocol.lower()
+            if protocol not in ("tcp", "udp"):
+                raise ValueError(f"Invalid protocol '{protocol}'. Must be 'tcp' or 'udp'.")
+        else:
+            port_str = port_spec
+            protocol = "tcp"
+
+        try:
+            port = int(port_str)
+        except ValueError:
+            raise ValueError(f"Invalid port number '{port_str}'.")
+
+        if not (1 <= port <= 65535):
+            raise ValueError(f"Port {port} out of range (1-65535).")
+
+        return port, protocol
+
+    def _get_project_for_firewall(self) -> str:
+        """Get project ID for firewall operations."""
+        # Try state first
+        state = self.load_state()
+        if state and state.project:
+            return state.project
+
+        # Try config
+        try:
+            config = self.load_gcp_config()
+            if config.project:
+                return config.project
+        except FileNotFoundError:
+            pass
+
+        # Try global config
+        global_config = self._load_global_config()
+        project = global_config.get("gcp", {}).get("project", "")
+
+        if not project:
+            raise ValueError("Project is required. Deploy first or specify with --project.")
+
+        return project
+
+    def _get_instance_name_for_firewall(self) -> str:
+        """Get instance name for firewall operations."""
+        state = self.load_state()
+        if state and state.instance_name:
+            return state.instance_name
+
+        try:
+            config = self.load_gcp_config()
+            if config.instance_name:
+                return config.instance_name
+        except FileNotFoundError:
+            pass
+
+        raise ValueError("Instance name is required. Deploy first or specify with --instance.")
+
+    def _ensure_instance_tag(self, instance_name: str, project: str) -> str:
+        """Ensure instance has the firewall tag, return the tag name."""
+        instance_tag = f"fw-{instance_name}"
+
+        state = self.load_state()
+        zone = state.zone if state else "us-central1-a"
+
+        result = self._run_gcloud([
+            "compute", "instances", "describe", instance_name,
+            f"--project={project}",
+            f"--zone={zone}",
+            "--format=value(tags.items)"
+        ], check=False)
+
+        current_tags = result.stdout.strip().split(";") if result.stdout.strip() else []
+        current_tags = [t.strip() for t in current_tags if t.strip()]
+
+        if instance_tag not in current_tags:
+            logger.info(f"Adding tag '{instance_tag}' to instance '{instance_name}'...")
+            self._run_gcloud([
+                "compute", "instances", "add-tags", instance_name,
+                f"--project={project}",
+                f"--zone={zone}",
+                f"--tags={instance_tag}"
+            ])
+            logger.info(f"Added tag '{instance_tag}' to instance")
+        else:
+            logger.debug(f"Instance already has tag '{instance_tag}'")
+
+        return instance_tag
+
+    def fw_allow(self, port_spec: str,
+                 source_ranges: Optional[List[str]] = None,
+                 instance_name: Optional[str] = None,
+                 project: Optional[str] = None) -> None:
+        """Add firewall rule to open a port for the instance."""
+        port, protocol = self._parse_port_spec(port_spec)
+        project = project or self._get_project_for_firewall()
+        instance_name = instance_name or self._get_instance_name_for_firewall()
+
+        if source_ranges is None:
+            source_ranges = ["0.0.0.0/0"]
+
+        # Always ensure instance has the tag first
+        instance_tag = self._ensure_instance_tag(instance_name, project)
+
+        rule_name = self._get_firewall_rule_name(instance_name, port, protocol)
+
+        # Check if rule already exists
+        result = self._run_gcloud([
+            "compute", "firewall-rules", "describe", rule_name,
+            f"--project={project}"
+        ], check=False)
+
+        if result.returncode == 0:
+            logger.info(f"Firewall rule '{rule_name}' already exists")
+            return
+
+        # Create firewall rule targeting this instance's tag
+        logger.info(f"Creating firewall rule '{rule_name}'...")
+        self._run_gcloud([
+            "compute", "firewall-rules", "create", rule_name,
+            f"--project={project}",
+            f"--allow={protocol}:{port}",
+            f"--source-ranges={','.join(source_ranges)}",
+            f"--target-tags={instance_tag}",
+            f"--description=Allow {protocol.upper()} port {port} for {instance_name}"
+        ])
+
+        logger.info(f"Opened {protocol.upper()} port {port} for instance '{instance_name}'")
+
+    def fw_deny(self, port_spec: str,
+                source_ranges: Optional[List[str]] = None,
+                instance_name: Optional[str] = None,
+                project: Optional[str] = None) -> None:
+        """Create a deny firewall rule to block traffic on a port."""
+        port, protocol = self._parse_port_spec(port_spec)
+        project = project or self._get_project_for_firewall()
+        instance_name = instance_name or self._get_instance_name_for_firewall()
+
+        if source_ranges is None:
+            source_ranges = ["0.0.0.0/0"]
+
+        # Always ensure instance has the tag first
+        instance_tag = self._ensure_instance_tag(instance_name, project)
+
+        rule_name = self._get_firewall_rule_name(instance_name, port, protocol, action="deny")
+
+        # Check if rule already exists
+        result = self._run_gcloud([
+            "compute", "firewall-rules", "describe", rule_name,
+            f"--project={project}"
+        ], check=False)
+
+        if result.returncode == 0:
+            logger.info(f"Firewall rule '{rule_name}' already exists")
+            return
+
+        # Create deny firewall rule with high priority (low number = high priority)
+        logger.info(f"Creating deny firewall rule '{rule_name}'...")
+        self._run_gcloud([
+            "compute", "firewall-rules", "create", rule_name,
+            f"--project={project}",
+            "--action=DENY",
+            f"--rules={protocol}:{port}",
+            f"--source-ranges={','.join(source_ranges)}",
+            f"--target-tags={instance_tag}",
+            "--priority=900",
+            f"--description=Deny {protocol.upper()} port {port} for {instance_name}"
+        ])
+
+        logger.info(f"Blocked {protocol.upper()} port {port} for instance '{instance_name}'")
+
+    def fw_remove(self, port_spec: str,
+                  instance_name: Optional[str] = None,
+                  project: Optional[str] = None) -> None:
+        """Remove a firewall rule (allow or deny) for a port."""
+        port, protocol = self._parse_port_spec(port_spec)
+        project = project or self._get_project_for_firewall()
+        instance_name = instance_name or self._get_instance_name_for_firewall()
+
+        # Try to delete both allow and deny rules
+        deleted = False
+        for action in ["allow", "deny"]:
+            rule_name = self._get_firewall_rule_name(instance_name, port, protocol, action=action)
+
+            # Check if rule exists
+            result = self._run_gcloud([
+                "compute", "firewall-rules", "describe", rule_name,
+                f"--project={project}"
+            ], check=False)
+
+            if result.returncode == 0:
+                # Delete the rule
+                logger.info(f"Deleting firewall rule '{rule_name}'...")
+                self._run_gcloud([
+                    "compute", "firewall-rules", "delete", rule_name,
+                    f"--project={project}",
+                    "--quiet"
+                ])
+                logger.info(f"Removed {action} rule for {protocol.upper()} port {port}")
+                deleted = True
+
+        if not deleted:
+            logger.info(f"No firewall rules found for {protocol.upper()} port {port} on instance '{instance_name}'")
+
+    def fw_list(self, instance_name: Optional[str] = None,
+                project: Optional[str] = None) -> None:
+        """List firewall rules for an instance."""
+        project = project or self._get_project_for_firewall()
+
+        if instance_name:
+            # List rules for specific instance
+            instance_tag = f"fw-{instance_name}"
+            filter_expr = f"name~^{instance_name}-allow- OR targetTags:{instance_tag}"
+        else:
+            # Try to get instance name from state
+            try:
+                instance_name = self._get_instance_name_for_firewall()
+                filter_expr = f"name~^{instance_name}-allow-"
+            except ValueError:
+                # List all dstack-related firewall rules
+                filter_expr = "name~^dstack-"
+
+        logger.info(f"Firewall rules for project '{project}':")
+        self._run_gcloud([
+            "compute", "firewall-rules", "list",
+            f"--project={project}",
+            f"--filter={filter_expr}",
+            "--format=table(name,direction,priority,allowed[].map().firewall_rule().list():label=ALLOW,sourceRanges.list():label=SRC_RANGES,targetTags.list():label=TARGET_TAGS)"
+        ], capture=False)
+
 
 def main():
     parser = argparse.ArgumentParser(
@@ -1730,6 +1976,15 @@ Examples:
   dstack-cloud stop
   dstack-cloud start
   dstack-cloud remove
+
+  # Firewall management
+  dstack-cloud fw allow 8080              # Allow TCP port 8080
+  dstack-cloud fw allow 53/udp            # Allow UDP port 53
+  dstack-cloud fw allow 443 -s 10.0.0.0/8 # Allow port 443 from specific range
+  dstack-cloud fw deny 22                 # Block TCP port 22
+  dstack-cloud fw deny 22 -s 0.0.0.0/0    # Block port 22 from all sources
+  dstack-cloud fw remove 8080             # Remove firewall rule for port 8080
+  dstack-cloud fw list                    # List firewall rules
 """
     )
 
@@ -1827,6 +2082,39 @@ Examples:
     list_parser = subparsers.add_parser("list", help="List all deployments")
     list_parser.add_argument("--project", "-p", type=str, help="GCP project ID")
 
+    # fw command group
+    fw_parser = subparsers.add_parser("fw", help="Firewall management")
+    fw_subparsers = fw_parser.add_subparsers(dest="fw_command", help="Firewall commands")
+
+    # fw allow
+    fw_allow_parser = fw_subparsers.add_parser("allow", help="Open a port for the instance")
+    fw_allow_parser.add_argument("port", type=str, help="Port to open (e.g., 8080, 53/udp)")
+    fw_allow_parser.add_argument("--source", "-s", type=str, action="append",
+                                 dest="source_ranges",
+                                 help="Source IP ranges (default: 0.0.0.0/0). Can be specified multiple times.")
+    fw_allow_parser.add_argument("--instance", "-i", type=str, help="Instance name (default: from state)")
+    fw_allow_parser.add_argument("--project", "-p", type=str, help="GCP project ID")
+
+    # fw deny
+    fw_deny_parser = fw_subparsers.add_parser("deny", help="Block traffic on a port")
+    fw_deny_parser.add_argument("port", type=str, help="Port to block (e.g., 8080, 53/udp)")
+    fw_deny_parser.add_argument("--source", "-s", type=str, action="append",
+                                dest="source_ranges",
+                                help="Source IP ranges to block (default: 0.0.0.0/0). Can be specified multiple times.")
+    fw_deny_parser.add_argument("--instance", "-i", type=str, help="Instance name (default: from state)")
+    fw_deny_parser.add_argument("--project", "-p", type=str, help="GCP project ID")
+
+    # fw remove
+    fw_remove_parser = fw_subparsers.add_parser("remove", help="Remove a firewall rule")
+    fw_remove_parser.add_argument("port", type=str, help="Port to remove rule for (e.g., 8080, 53/udp)")
+    fw_remove_parser.add_argument("--instance", "-i", type=str, help="Instance name (default: from state)")
+    fw_remove_parser.add_argument("--project", "-p", type=str, help="GCP project ID")
+
+    # fw list
+    fw_list_parser = fw_subparsers.add_parser("list", help="List firewall rules for instance")
+    fw_list_parser.add_argument("--instance", "-i", type=str, help="Instance name (default: from state)")
+    fw_list_parser.add_argument("--project", "-p", type=str, help="GCP project ID")
+
     args = parser.parse_args()
 
     if args.verbose:
@@ -1892,6 +2180,34 @@ Examples:
             manager.remove(keep_images=args.keep_images)
         elif args.command == "list":
             manager.list_deployments(project=args.project)
+        elif args.command == "fw":
+            if args.fw_command == "allow":
+                manager.fw_allow(
+                    port_spec=args.port,
+                    source_ranges=args.source_ranges,
+                    instance_name=args.instance,
+                    project=args.project
+                )
+            elif args.fw_command == "deny":
+                manager.fw_deny(
+                    port_spec=args.port,
+                    source_ranges=args.source_ranges,
+                    instance_name=args.instance,
+                    project=args.project
+                )
+            elif args.fw_command == "remove":
+                manager.fw_remove(
+                    port_spec=args.port,
+                    instance_name=args.instance,
+                    project=args.project
+                )
+            elif args.fw_command == "list":
+                manager.fw_list(
+                    instance_name=args.instance,
+                    project=args.project
+                )
+            else:
+                fw_parser.print_help()
         else:
             parser.print_help()
     except Exception as e:
