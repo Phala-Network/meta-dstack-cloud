@@ -675,11 +675,12 @@ class CloudDeploymentManager:
                 f.write("# Prelaunch script - runs before starting containers\n")
             os.chmod(prelaunch, 0o755)
 
-        # Create .env template at project root
-        env_file = self.work_dir / ".env"
-        if not env_file.exists() or force:
-            with open(env_file, 'w') as f:
-                f.write("# Environment variables\n")
+        # Create .env template at project root (only for KMS mode)
+        if app_template["key_provider"] == "kms":
+            env_file = self.work_dir / ".env"
+            if not env_file.exists() or force:
+                with open(env_file, 'w') as f:
+                    f.write("# Environment variables\n")
 
         # Create user-config template at project root
         user_config = self.work_dir / ".user-config"
@@ -699,7 +700,8 @@ class CloudDeploymentManager:
         logger.info(f"  shared/ - System-generated files")
         logger.info(f"  {docker_compose.name} - Docker compose file")
         logger.info(f"  {prelaunch.name} - Prelaunch script")
-        logger.info(f"  {env_file.name} - Environment variables")
+        if app_template["key_provider"] == "kms":
+            logger.info(f"  .env - Environment variables")
         logger.info(f"  .user-config - User configuration")
         logger.info("")
         logger.info("Edit the configuration files to customize your deployment.")
