@@ -68,6 +68,7 @@ FILES:${PN}-dev += "\
 "
 # Skip buildpaths QA check for kernel modules
 INSANE_SKIP:${PN} += "buildpaths"
+INSANE_SKIP:${PN}-dbg += "buildpaths"
 
 # Not yet ported to rv32
 COMPATIBLE_HOST:riscv32 = "null"
