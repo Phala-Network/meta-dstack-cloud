@@ -232,6 +232,7 @@ class DeploymentState:
     created_at: str = ""
     updated_at: str = ""
     boot_image: str = ""
+    data_image: str = ""
     shared_image: str = ""
 
     def to_dict(self) -> Dict[str, Any]:
@@ -458,6 +459,80 @@ class CloudDeploymentManager:
             raise RuntimeError(f"gsutil command failed: {result.stderr}")
 
         return result
+
+    def _ensure_data_disk_image(self, config: GcpConfig) -> str:
+        """Ensure the data disk image exists, creating it if necessary.
+
+        Creates a minimal disk image with GPT partition table and a partition
+        labeled 'dstack-data' so the guest can discover it.
+
+        Returns the image name to use.
+        """
+        image_name = config.data_image
+
+        # Check if image already exists
+        result = self._run_gcloud([
+            "compute", "images", "describe", image_name,
+            f"--project={config.project}"
+        ], check=False)
+
+        if result.returncode == 0:
+            logger.debug(f"Data disk image '{image_name}' already exists")
+            return image_name
+
+        logger.info(f"Data disk image '{image_name}' not found, creating...")
+
+        # Create a minimal raw disk image with GPT partition table
+        with tempfile.TemporaryDirectory() as tmpdir:
+            raw_file = os.path.join(tmpdir, "disk.raw")
+
+            # Create a 10MB sparse file (enough for GPT)
+            disk_size_bytes = 10 * 1024 * 1024
+            with open(raw_file, 'wb') as f:
+                f.truncate(disk_size_bytes)
+
+            # Create GPT partition table with dstack-data partition using sgdisk
+            # -o: clear and create new GPT
+            # -n 1:0:0: create partition 1, start at first available, end at last available
+            # -c 1:dstack-data: set partition 1 name (PARTLABEL) to dstack-data
+            result = subprocess.run(
+                ["sgdisk", "-o", "-n", "1:0:0", "-c", "1:dstack-data", raw_file],
+                capture_output=True, text=True
+            )
+            if result.returncode != 0:
+                raise RuntimeError(f"Failed to create GPT partition table: {result.stderr}")
+
+            logger.debug("Created GPT partition table with dstack-data label")
+
+            # Compress to tar.gz for upload
+            tar_file = os.path.join(tmpdir, "disk.tar.gz")
+            result = subprocess.run(
+                ["tar", "-czf", tar_file, "-C", tmpdir, "disk.raw"],
+                capture_output=True, text=True
+            )
+            if result.returncode != 0:
+                raise RuntimeError(f"Failed to create tar.gz: {result.stderr}")
+
+            # Upload to GCS
+            gcs_path = f"{config.bucket}/{image_name}.tar.gz"
+            logger.info(f"Uploading data disk image to {gcs_path}...")
+            self._run_gsutil(["cp", tar_file, gcs_path])
+
+            # Create GCP image from the uploaded file
+            logger.info(f"Creating GCP image '{image_name}'...")
+            self._run_gcloud([
+                "compute", "images", "create", image_name,
+                f"--project={config.project}",
+                f"--source-uri={gcs_path}",
+                "--guest-os-features=GVNIC"
+            ])
+
+            # Clean up GCS file
+            self._run_gsutil(["rm", gcs_path], check=False)
+
+            logger.info(f"Created data disk image '{image_name}'")
+
+        return image_name
 
     def new(
         self,
@@ -1250,6 +1325,9 @@ class CloudDeploymentManager:
         # Create shared disk image
         shared_image = self._create_shared_disk_image(config, app)
 
+        # Ensure data disk image exists (with GPT partition labeled 'dstack-data')
+        data_image = self._ensure_data_disk_image(config)
+
         # Create TDX instance
         logger.info("Creating TDX instance...")
 
@@ -1261,7 +1339,7 @@ class CloudDeploymentManager:
             "--confidential-compute-type=TDX",
             f"--image={boot_image}",
             "--boot-disk-size=10GB",
-            f"--create-disk=name={config.instance_name}-data,size={config.data_size}GB,type=pd-balanced,image={config.data_image},auto-delete=yes",
+            f"--create-disk=name={config.instance_name}-data,size={config.data_size}GB,type=pd-balanced,image={data_image},auto-delete=yes",
             f"--create-disk=name={config.instance_name}-shared,size=1GB,type=pd-balanced,image={shared_image},auto-delete=yes",
             "--maintenance-policy=TERMINATE",
         ]
@@ -1306,6 +1384,7 @@ class CloudDeploymentManager:
             status="RUNNING",
             created_at=datetime.now().isoformat(),
             boot_image=boot_image,
+            data_image=data_image,
             shared_image=shared_image,
         )
         self.save_state(state)
