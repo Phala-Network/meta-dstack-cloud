@@ -23,7 +23,7 @@
 	url = https://github.com/Dstack-TEE/meta-rust-bin
 [submodule "dstack"]
 	path = dstack
-	url = git@github.com:Phala-Network/dstack-gcp.git
+	url = https://github.com/Phala-Network/dstack-gcp.git
 [submodule "meta-security"]
 	path = meta-security
 	url = https://github.com/Dstack-TEE/meta-security.git
