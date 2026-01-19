@@ -4,7 +4,7 @@ This project implements Yocto layer and the overall build scripts for dstack Bas
 
 ## Build
 
-See https://github.com/Dstack-TEE/dstack for more details.
+See https://github.com/Phala-Network/dstack-cloud for more details.
 
 ## Reproducible Build The Guest Image
 
@@ -15,7 +15,7 @@ See https://github.com/Dstack-TEE/dstack for more details.
 ### Build commands
 
 ```bash
-git clone https://github.com/Dstack-TEE/meta-dstack.git
+git clone https://github.com/Phala-Network/meta-dstack-cloud.git
 cd meta-dstack/repro-build/
 ./repro-build.sh
 ```
