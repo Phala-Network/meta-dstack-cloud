@@ -12,6 +12,8 @@ fakeroot do_unpack_modprobe() {
 addtask unpack_modprobe after do_unpack before do_patch
 do_unpack_modprobe[dirs] = "${S}"
 do_unpack_modprobe[vardeps] += "NVIDIA_MODPROBE_VERSION"
+# Ensure pseudo (fakeroot worker) is staged before this fakeroot task runs.
+do_unpack_modprobe[depends] += "pseudo-native:do_populate_sysroot"
 
 PACKAGECONFIG ??= "seccomp"
 PACKAGECONFIG[seccomp] = "WITH_SECCOMP=yes,WITH_SECCOMP=no,libseccomp"
