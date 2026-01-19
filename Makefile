@@ -9,7 +9,7 @@ DIST_DIR ?= ${BB_BUILD_DIR}/dist
 export BB_BUILD_DIR
 export DIST_DIR
 
-DIST_NAMES ?= dstack dstack-dev dstack-nvidia dstack-nvidia-dev
+DIST_NAMES ?= dstack-cloud dstack-cloud-nvidia
 ROOTFS_IMAGE_NAMES = $(addsuffix -rootfs,${DIST_NAMES})
 
 all: dist
