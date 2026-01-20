@@ -57,11 +57,7 @@ OVMF_FIRMWARE=${COMMON_IMG_DIR}/ovmf.fd
 ROOTFS_IMAGE=${FLAVOR_IMG_DIR}/dstack-rootfs-tdx.squashfs.verity
 
 # UKI filename depends on flavor
-if [[ "$FLAVOR" == "prod" ]]; then
-    UKI_IMAGE=${FLAVOR_IMG_DIR}/dstack-uki.efi
-else
-    UKI_IMAGE=${FLAVOR_IMG_DIR}/dstack-uki-${FLAVOR}.efi
-fi
+UKI_IMAGE=${FLAVOR_IMG_DIR}/dstack-uki.efi
 
 # Verity env is in the flavor-specific work-shared directory
 VERITY_ENV_FILE=${BB_BUILD_DIR}/tmp-mc-${FLAVOR}/work-shared/tdx/dm-verity/dstack-rootfs.squashfs.verity.env
@@ -228,9 +224,12 @@ $Q cp $KERNEL_IMAGE ${OUTPUT_DIR}/
 $Q cp $OVMF_FIRMWARE ${OUTPUT_DIR}/
 $Q cp $ROOTFS_IMAGE ${OUTPUT_DIR}/rootfs.img.verity
 
-# Copy UKI Authenticode hash if available
-if [[ -f "${UKI_IMAGE}.auth_hash.txt" ]]; then
-    $Q cp "${UKI_IMAGE}.auth_hash.txt" "${OUTPUT_DIR}/dstack-uki.efi.auth_hash.txt"
+# Calculate and copy UKI Authenticode hash
+if [[ -f "$UKI_IMAGE" ]]; then
+    write_authenticode_hash_if_missing "$UKI_IMAGE"
+    if [[ -f "${UKI_IMAGE}.auth_hash.txt" ]]; then
+        $Q cp "${UKI_IMAGE}.auth_hash.txt" "${OUTPUT_DIR}/dstack-uki.efi.auth_hash.txt"
+    fi
 fi
 
 echo "Creating partitioned rootfs image at ${OUTPUT_DIR}/rootfs.img.parted.verity"
