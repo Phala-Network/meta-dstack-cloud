@@ -37,4 +37,4 @@ DEPENDS = " \
             libtirpc134 \
             ldconfig-native \
             "
-RDEPENDS:${PN}:append= " ldconfig-compatibility-symlink containerd-config"
+RDEPENDS:${PN}:append = " ldconfig-compatibility-symlink containerd-config"

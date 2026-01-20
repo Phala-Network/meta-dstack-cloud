@@ -36,6 +36,9 @@ if [ ! -f "$BUILD_DIR/conf/local.conf" ]; then
     mkdir -p "$BUILD_DIR/conf"
     cp -f "$THIS_DIR/bb-build/conf/local.conf" "$BUILD_DIR/conf/local.conf"
 fi
+if [ ! -d "$BUILD_DIR/conf/multiconfig" ] && [ -d "$THIS_DIR/bb-build/conf/multiconfig" ]; then
+    cp -rf "$THIS_DIR/bb-build/conf/multiconfig" "$BUILD_DIR/conf/"
+fi
 
 OE_INIT=$THIS_DIR/openembedded-core/oe-init-build-env
 

@@ -18,18 +18,20 @@ INITRAMFS_FSTYPES = "cpio.gz"
 # Kernel settings
 KERNEL_IMAGETYPE = "bzImage"
 
-# Output filename
-UKI_FILENAME = "dstack-uki.efi"
-
 # Base kernel cmdline (verity hash added dynamically)
 UKI_CMDLINE_BASE = "console=ttyS0 init=/init panic=1 net.ifnames=0 biosdevname=0 \
 mce=off oops=panic pci=noearly pci=nommconf random.trust_cpu=y random.trust_bootloader=n \
 tsc=reliable no-kvmclock"
 
-# Verity image to get hash from
-# Override with VERITY_IMAGE = "dstack-dev-rootfs" for dev builds
-VERITY_IMAGE ?= "dstack-rootfs"
+# Flavor settings (should match dstack-rootfs.bb, set via multiconfig)
+DSTACK_FLAVOR ?= "prod"
+
+# Verity image to get hash from - always use dstack-rootfs (same PN, different multiconfig)
+VERITY_IMAGE = "dstack-rootfs"
 VERITY_TYPE = "squashfs"
+
+# Output filename includes flavor to avoid conflicts between multiconfigs
+UKI_FILENAME = "${@'dstack-uki.efi' if d.getVar('DSTACK_FLAVOR') == 'prod' else 'dstack-uki-' + d.getVar('DSTACK_FLAVOR') + '.efi'}"
 
 do_configure[noexec] = "1"
 do_compile[noexec] = "1"
@@ -39,6 +41,7 @@ do_install[noexec] = "1"
 do_uki[depends] += "systemd-boot:do_deploy virtual/kernel:do_deploy"
 do_uki[depends] += "${INITRAMFS_IMAGE}:do_image_complete"
 do_uki[depends] += "${VERITY_IMAGE}:do_image_complete"
+do_uki[depends] += "systemd-boot-native:do_populate_sysroot python3-pefile-native:do_populate_sysroot"
 
 python do_uki() {
     import os

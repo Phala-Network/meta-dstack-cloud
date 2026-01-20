@@ -11,9 +11,13 @@ while [ $# -gt 0 ]; do
             DIST_NAME="$2"
             shift 2
             ;;
+        --flavor)
+            FLAVOR="$2"
+            shift 2
+            ;;
         *)
             echo "Unknown option: $1"
-            echo "Usage: $0 --dist-name NAME"
+            echo "Usage: $0 --dist-name NAME --flavor FLAVOR"
             exit 1
             ;;
     esac
@@ -22,6 +26,11 @@ done
 # Validate required arguments
 if [ -z "$DIST_NAME" ]; then
     echo "Error: --dist-name is required"
+    exit 1
+fi
+
+if [ -z "$FLAVOR" ]; then
+    echo "Error: --flavor is required (prod, dev, nvidia, nvidia-dev)"
     exit 1
 fi
 
@@ -35,16 +44,27 @@ fi
 BB_BUILD_DIR=$(realpath ${BB_BUILD_DIR:-build})
 DIST_DIR=$(realpath ${DIST_DIR:-${BB_BUILD_DIR}/dist})
 
-IMG_DIR=${BB_BUILD_DIR}/tmp/deploy/images/tdx
-ROOTFS_IMAGE_NAME=${DIST_NAME}-rootfs
+# Common artifacts are in tmp/, flavor-specific artifacts are in tmp-mc-<flavor>/
+COMMON_IMG_DIR=${BB_BUILD_DIR}/tmp/deploy/images/tdx
+FLAVOR_IMG_DIR=${BB_BUILD_DIR}/tmp-mc-${FLAVOR}/deploy/images/tdx
 
-INITRAMFS_IMAGE=${IMG_DIR}/dstack-initramfs.cpio.gz
-ROOTFS_IMAGE=${IMG_DIR}/${ROOTFS_IMAGE_NAME}-tdx.squashfs.verity
-KERNEL_IMAGE=${IMG_DIR}/bzImage
-OVMF_FIRMWARE=${IMG_DIR}/ovmf.fd
-UKI_IMAGE=${IMG_DIR}/dstack-uki.efi
-# Always use the work-shared directory which has the correct verity env
-VERITY_ENV_FILE=${BB_BUILD_DIR}/tmp/work-shared/tdx/dm-verity/${ROOTFS_IMAGE_NAME}.squashfs.verity.env
+# Common artifacts (shared across all flavors)
+INITRAMFS_IMAGE=${COMMON_IMG_DIR}/dstack-initramfs.cpio.gz
+KERNEL_IMAGE=${COMMON_IMG_DIR}/bzImage
+OVMF_FIRMWARE=${COMMON_IMG_DIR}/ovmf.fd
+
+# Flavor-specific artifacts (from multiconfig build)
+ROOTFS_IMAGE=${FLAVOR_IMG_DIR}/dstack-rootfs-tdx.squashfs.verity
+
+# UKI filename depends on flavor
+if [[ "$FLAVOR" == "prod" ]]; then
+    UKI_IMAGE=${FLAVOR_IMG_DIR}/dstack-uki.efi
+else
+    UKI_IMAGE=${FLAVOR_IMG_DIR}/dstack-uki-${FLAVOR}.efi
+fi
+
+# Verity env is in the flavor-specific work-shared directory
+VERITY_ENV_FILE=${BB_BUILD_DIR}/tmp-mc-${FLAVOR}/work-shared/tdx/dm-verity/dstack-rootfs.squashfs.verity.env
 echo "Loading verity env from ${VERITY_ENV_FILE}"
 source ${VERITY_ENV_FILE}
 
@@ -246,7 +266,7 @@ popd
 if [ "$ENABLE_GCP_IMAGE" = "1" ]; then
     if [[ ! -f "$UKI_IMAGE" ]]; then
         echo "Skipping GCP disk image creation because UKI image not found: $UKI_IMAGE" >&2
-        echo "Run 'bitbake dstack-uki' to build the UKI first" >&2
+        echo "Run 'bitbake mc:${FLAVOR}:dstack-uki' to build the UKI first" >&2
     elif command -v sgdisk >/dev/null && \
          command -v mkfs.vfat >/dev/null && \
          command -v mcopy >/dev/null; then
