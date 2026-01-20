@@ -37,8 +37,10 @@ do_unpack() {
     fi
 }
 
+# Force the configure task to run every time to detect source changes
+do_unpack[nostamp] = "1"
+
 # Add source directory to configure task dependencies
-# Note: removed nostamp to avoid concurrent build conflicts in multiconfig
 do_unpack[vardeps] += "SRC_DIR"
 
 do_configure() {
