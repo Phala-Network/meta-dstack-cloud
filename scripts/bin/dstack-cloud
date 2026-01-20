@@ -393,6 +393,15 @@ class CloudDeploymentManager:
                 if not os.path.isabs(search_path):
                     search_path = os.path.join(self.work_dir, search_path)
 
+                # Try new format first (auth_hash.txt in -uki directory)
+                hash_file = Path(search_path) / f"{local_image}-uki" / "auth_hash.txt"
+                if hash_file.exists():
+                    with open(hash_file, 'r') as f:
+                        os_image_hash = f.read().strip()
+                    logger.info(f"Read OS image hash from {hash_file}")
+                    break
+
+                # Fall back to legacy format
                 hash_file = Path(search_path) / local_image / "dstack-uki.efi.auth_hash.txt"
                 if hash_file.exists():
                     with open(hash_file, 'r') as f:
@@ -888,7 +897,7 @@ class CloudDeploymentManager:
         logger.info("These files will be included in the shared disk image during deploy.")
 
     def _find_boot_image_tar(self, local_image: str) -> Optional[Path]:
-        """Search for boot image tar file in configured search paths."""
+        """Search for boot image disk.raw file in configured search paths."""
         global_config = self._load_global_config()
         search_paths = global_config.get("image_search_paths", [])
 
@@ -903,9 +912,10 @@ class CloudDeploymentManager:
                 expanded = os.path.join(self.work_dir, expanded)
             expanded_paths.append(Path(expanded))
 
-        # Try different file name patterns
+        # Try different file name patterns (new -uki format first, then legacy gcp.tar.gz)
         patterns = [
-            f"{local_image}/gcp.tar.gz",
+            f"{local_image}-uki/disk.raw",
+            f"{local_image}/gcp.tar.gz",  # Legacy format
         ]
 
         for search_path in expanded_paths:
@@ -913,16 +923,16 @@ class CloudDeploymentManager:
             if not search_path.exists():
                 continue
             for pattern in patterns:
-                tar_file = search_path / pattern
-                logger.debug(f"Checking: {tar_file}, exists: {tar_file.exists()}")
-                if tar_file.exists():
-                    logger.info(f"Found boot image: {tar_file}")
-                    return tar_file
+                file_path = search_path / pattern
+                logger.debug(f"Checking: {file_path}, exists: {file_path.exists()}")
+                if file_path.exists():
+                    logger.info(f"Found boot image: {file_path}")
+                    return file_path
 
         return None
 
     def pull(self, os_image: str) -> None:
-        """Download OS image from remote repository."""
+        """Download UKI image from remote repository."""
         global_config = self._load_global_config()
         search_paths = global_config.get("image_search_paths", [])
 
@@ -935,8 +945,8 @@ class CloudDeploymentManager:
         target_dir = Path(os.path.expanduser(search_paths[0]))
         target_dir.mkdir(parents=True, exist_ok=True)
 
-        # Download tar file (e.g., dstack-0.6.0.tar.gz)
-        download_tar = target_dir / f"{os_image}.tar.gz"
+        # Download UKI tar file (e.g., dstack-cloud-nvidia-0.6.0-uki.tar.gz)
+        download_tar = target_dir / f"{os_image}-uki.tar.gz"
 
         if download_tar.exists():
             logger.info(f"Download file already exists: {download_tar}")
@@ -946,9 +956,9 @@ class CloudDeploymentManager:
                 return
 
         # Download URL
-        download_url = f"https://download.dstack.org/os-images/{os_image}.tar.gz"
+        download_url = f"https://download.dstack.org/os-images/{os_image}-uki.tar.gz"
 
-        logger.info(f"Downloading {os_image} from {download_url}...")
+        logger.info(f"Downloading {os_image} UKI image from {download_url}...")
         logger.info(f"Target: {download_tar}")
 
         try:
@@ -972,46 +982,46 @@ class CloudDeploymentManager:
                 ["tar", "-xzf", str(download_tar), "-C", str(target_dir)],
                 check=True
             )
-            logger.info(f"Successfully extracted to {target_dir / os_image}")
+            logger.info(f"Successfully extracted to {target_dir / os_image}-uki")
         except subprocess.CalledProcessError as e:
             logger.error(f"Failed to extract image: {e}")
             raise
 
         # Verify the expected structure
-        expected_dir = target_dir / os_image
-        expected_tar = expected_dir / "gcp.tar.gz"
-        if expected_tar.exists():
-            logger.info(f"Image ready: {expected_tar}")
+        expected_dir = target_dir / f"{os_image}-uki"
+        expected_disk = expected_dir / "disk.raw"
+        if expected_disk.exists():
+            logger.info(f"Image ready: {expected_disk}")
         else:
-            logger.warning(f"Expected file not found: {expected_tar}")
+            logger.warning(f"Expected file not found: {expected_disk}")
             logger.warning(f"Downloaded structure may be incorrect")
 
     def _check_and_upload_boot_image(self, config: GcpConfig, app: App, force: bool = False) -> str:
         """Check and upload boot image if needed. Returns the image name."""
-        tar_path = None
+        image_path = None
 
         # Derive GCP image name from app.os_image
         gcp_image = config.boot_image
         if not gcp_image:
-            # Convert OS image name (dstack-0.6.0 -> dstack-0-6-0)
+            # Convert OS image name (dstack-cloud-nvidia-0.6.0 -> dstack-cloud-nvidia-0-6-0)
             gcp_image = app.os_image.replace(".", "-")
 
-        # If boot_image_tar is specified, use it
+        # If boot_image_tar is specified, use it (legacy config name, can be disk.raw or tar.gz)
         if config.boot_image_tar:
-            tar_path = Path(os.path.expanduser(config.boot_image_tar))
-            if not tar_path.exists():
+            image_path = Path(os.path.expanduser(config.boot_image_tar))
+            if not image_path.exists():
                 logger.error("")
-                logger.error(f"Boot image tar not found: {tar_path}")
+                logger.error(f"Boot image not found: {image_path}")
                 logger.error("")
                 logger.error(f"Please download the image using:")
                 logger.error(f"  dstack-cloud pull {app.os_image}")
                 logger.error("")
-                raise FileNotFoundError(f"Boot image tar not found: {tar_path}")
+                raise FileNotFoundError(f"Boot image not found: {image_path}")
         else:
             # Auto-discover from search paths using OS image name
             logger.info(f"Searching for boot image '{app.os_image}'...")
-            tar_path = self._find_boot_image_tar(app.os_image)
-            if not tar_path:
+            image_path = self._find_boot_image_tar(app.os_image)
+            if not image_path:
                 logger.error("")
                 logger.error(f"Boot image '{app.os_image}' not found locally.")
                 logger.error("")
@@ -1023,9 +1033,12 @@ class CloudDeploymentManager:
                     f"Run 'dstack-cloud pull {app.os_image}' to download it."
                 )
 
+        # Determine if we have disk.raw (new format) or gcp.tar.gz (legacy format)
+        is_raw_disk = image_path.name == "disk.raw"
+
         # Use gcp_image as the GCP image name
         image_name = gcp_image
-        local_mtime = tar_path.stat().st_mtime
+        local_mtime = image_path.stat().st_mtime
 
         # Check if GCP image exists and is up-to-date
         result = self._run_gcloud([
@@ -1061,10 +1074,30 @@ class CloudDeploymentManager:
                 need_upload = True
 
         if need_upload:
-            logger.info("Uploading boot image to GCS...")
-            self._run_gsutil([
-                "cp", str(tar_path), f"{config.bucket}/{image_name}.tar.gz"
-            ])
+            if is_raw_disk:
+                # New format: disk.raw needs to be compressed to tar.gz for upload
+                logger.info("Compressing disk.raw to tar.gz for upload...")
+                import tempfile
+                with tempfile.TemporaryDirectory() as tmpdir:
+                    tar_file = os.path.join(tmpdir, "disk.tar.gz")
+                    result = subprocess.run(
+                        ["tar", "-czvf", tar_file, "-C", str(image_path.parent), "disk.raw"],
+                        capture_output=True,
+                        text=True
+                    )
+                    if result.returncode != 0:
+                        raise RuntimeError(f"Failed to create tar.gz: {result.stderr}")
+
+                    logger.info("Uploading boot image to GCS...")
+                    self._run_gsutil([
+                        "cp", tar_file, f"{config.bucket}/{image_name}.tar.gz"
+                    ])
+            else:
+                # Legacy format: gcp.tar.gz can be uploaded directly
+                logger.info("Uploading boot image to GCS...")
+                self._run_gsutil([
+                    "cp", str(image_path), f"{config.bucket}/{image_name}.tar.gz"
+                ])
 
             # Delete existing image if present
             if gcp_creation_time:

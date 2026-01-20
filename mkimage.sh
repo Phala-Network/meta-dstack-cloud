@@ -2,7 +2,7 @@
 set -e
 
 DSTACK_TAR_RELEASE=${DSTACK_TAR_RELEASE:-1}
-ENABLE_GCP_IMAGE=${ENABLE_GCP_IMAGE:-1}
+ENABLE_UKI_IMAGE=${ENABLE_UKI_IMAGE:-1}
 
 # Parse command line arguments
 while [ $# -gt 0 ]; do
@@ -56,7 +56,7 @@ OVMF_FIRMWARE=${COMMON_IMG_DIR}/ovmf.fd
 # Flavor-specific artifacts (from multiconfig build)
 ROOTFS_IMAGE=${FLAVOR_IMG_DIR}/dstack-rootfs-tdx.squashfs.verity
 
-# UKI filename depends on flavor
+# UKI filename
 UKI_IMAGE=${FLAVOR_IMG_DIR}/dstack-uki.efi
 
 # Verity env is in the flavor-specific work-shared directory
@@ -65,8 +65,12 @@ echo "Loading verity env from ${VERITY_ENV_FILE}"
 source ${VERITY_ENV_FILE}
 
 DSTACK_VERSION=$(bitbake-getvar --value DISTRO_VERSION | tail -1)
+
+# Output directory contains all artifacts; tarballs contain subsets
 OUTPUT_DIR=${OUTPUT_DIR:-"${DIST_DIR}/${DIST_NAME}-${DSTACK_VERSION}"}
 IMAGE_TAR=${IMAGE_TAR:-"${DIST_DIR}/${DIST_NAME}-${DSTACK_VERSION}.tar.gz"}
+IMAGE_TAR_UKI="${DIST_DIR}/${DIST_NAME}-${DSTACK_VERSION}-uki.tar.gz"
+TAR_DIR_NAME="${DIST_NAME}-${DSTACK_VERSION}"
 
 AUTHENTICODE_HASH_SCRIPT="${BB_BUILD_DIR}/../scripts/bin/authenticode_hash.py"
 
@@ -119,21 +123,6 @@ write_authenticode_hash_if_missing() {
     fi
 }
 
-create_uki_bootstrap() {
-    local target_dir="$1"
-    mkdir -p "$target_dir/EFI/BOOT"
-
-    local uki_file="${UKI_IMAGE}"
-    if [[ ! -f "$uki_file" ]]; then
-        echo "Error: UKI image not found: $uki_file" >&2
-        return 1
-    fi
-    cp "$uki_file" "$target_dir/EFI/BOOT/BOOTX64.EFI"
-
-    # Calculate Authenticode hash if not already present
-    write_authenticode_hash_if_missing "$uki_file"
-}
-
 create_partitioned_rootfs() {
     local rootfs_img="$1"
     local output_img="$2"
@@ -159,9 +148,9 @@ create_partitioned_rootfs() {
     )
 }
 
-build_gcp_disk_image() {
+build_uki_disk_image() {
     local disk_img="$1"
-    local boot_source="$2"
+    local uki_file="$2"
     local rootfs_img="$3"
     (
         set -e
@@ -190,50 +179,43 @@ build_gcp_disk_image() {
         local tmp_dir
         tmp_dir=$(mktemp -d)
         trap 'rm -rf "$tmp_dir"' EXIT
+
+        # Create EFI filesystem with UKI as bootloader
         local efi_img=${tmp_dir}/efi.img
         mkfs.vfat -F 32 -n DSTACKEFI -C "$efi_img" $((efi_size_aligned / 1024)) >/dev/null
-        (cd "$boot_source" && mcopy -s -i "$efi_img" ./* ::) >/dev/null
+        mmd -i "$efi_img" ::EFI ::EFI/BOOT
+        mcopy -i "$efi_img" "$uki_file" ::EFI/BOOT/BOOTX64.EFI
 
         dd if="$efi_img" of="$disk_img" bs=$align seek=$((efi_start / align)) conv=notrunc status=none
         dd if="$rootfs_img" of="$disk_img" bs=$align seek=$((rootfs_start / align)) conv=notrunc status=none
     )
 }
 
-create_gcp_artifacts() {
-    local gcp_dir="${OUTPUT_DIR}/gcp"
-    local boot_src="${gcp_dir}/efi-root"
-    mkdir -p "$boot_src"
-    echo "Installing UKI as EFI bootloader at ${boot_src}"
-    create_uki_bootstrap "$boot_src"
+create_uki_artifacts() {
+    local uki_dir="$1"
+    mkdir -p "$uki_dir"
 
-    local disk_img="${gcp_dir}/disk.raw"
-    echo "Building raw disk image for GCP at ${disk_img}"
-    build_gcp_disk_image "$disk_img" "$boot_src" "${OUTPUT_DIR}/rootfs.img.verity"
+    echo "Building UKI disk image at ${uki_dir}/disk.raw"
+    build_uki_disk_image "${uki_dir}/disk.raw" "$UKI_IMAGE" "$ROOTFS_IMAGE"
 
-    local tarball="${OUTPUT_DIR}/gcp.tar.gz"
-    echo "Archiving GCP disk image to ${tarball}"
-    (cd "$gcp_dir" && tar -czvf "$tarball" disk.raw)
+    # Calculate and copy auth hash
+    write_authenticode_hash_if_missing "$UKI_IMAGE"
+    if [[ -f "${UKI_IMAGE}.auth_hash.txt" ]]; then
+        cp "${UKI_IMAGE}.auth_hash.txt" "${uki_dir}/auth_hash.txt"
+    fi
 }
 
 Q=verbose
 
+# Create bare metal image directory
 $Q rm -rf ${OUTPUT_DIR}/
 $Q mkdir -p ${OUTPUT_DIR}/
 $Q cp $INITRAMFS_IMAGE ${OUTPUT_DIR}/initramfs.cpio.gz
 $Q cp $KERNEL_IMAGE ${OUTPUT_DIR}/
 $Q cp $OVMF_FIRMWARE ${OUTPUT_DIR}/
-$Q cp $ROOTFS_IMAGE ${OUTPUT_DIR}/rootfs.img.verity
-
-# Calculate and copy UKI Authenticode hash
-if [[ -f "$UKI_IMAGE" ]]; then
-    write_authenticode_hash_if_missing "$UKI_IMAGE"
-    if [[ -f "${UKI_IMAGE}.auth_hash.txt" ]]; then
-        $Q cp "${UKI_IMAGE}.auth_hash.txt" "${OUTPUT_DIR}/dstack-uki.efi.auth_hash.txt"
-    fi
-fi
 
 echo "Creating partitioned rootfs image at ${OUTPUT_DIR}/rootfs.img.parted.verity"
-create_partitioned_rootfs "${OUTPUT_DIR}/rootfs.img.verity" "${OUTPUT_DIR}/rootfs.img.parted.verity"
+create_partitioned_rootfs "$ROOTFS_IMAGE" "${OUTPUT_DIR}/rootfs.img.parted.verity"
 
 GIT_REVISION=$(git rev-parse HEAD 2>/dev/null || echo "<unknown>")
 echo "Generating metadata.json to ${OUTPUT_DIR}/metadata.json"
@@ -262,28 +244,43 @@ sha256sum ovmf.fd bzImage initramfs.cpio.gz metadata.json > sha256sum.txt
 sha256sum sha256sum.txt | awk '{print $1}' > digest.txt
 popd
 
-if [ "$ENABLE_GCP_IMAGE" = "1" ]; then
+# Create UKI artifacts (disk.raw and auth_hash.txt) in OUTPUT_DIR
+UKI_CREATED=0
+if [ "$ENABLE_UKI_IMAGE" = "1" ]; then
     if [[ ! -f "$UKI_IMAGE" ]]; then
-        echo "Skipping GCP disk image creation because UKI image not found: $UKI_IMAGE" >&2
+        echo "Skipping UKI disk image creation because UKI image not found: $UKI_IMAGE" >&2
         echo "Run 'bitbake mc:${FLAVOR}:dstack-uki' to build the UKI first" >&2
     elif command -v sgdisk >/dev/null && \
          command -v mkfs.vfat >/dev/null && \
-         command -v mcopy >/dev/null; then
-        create_gcp_artifacts
+         command -v mcopy >/dev/null && \
+         command -v mmd >/dev/null; then
+        create_uki_artifacts "${OUTPUT_DIR}"
+        UKI_CREATED=1
     else
-        echo "Error: cannot create GCP disk image because required tools are missing" >&2
-        echo "Missing tools are among: sgdisk (gdisk), mkfs.vfat (dosfstools), mcopy (mtools)" >&2
-        echo "Install them (e.g. apt-get install -y gdisk dosfstools mtools) or set ENABLE_GCP_IMAGE=0" >&2
+        echo "Error: cannot create UKI disk image because required tools are missing" >&2
+        echo "Missing tools are among: sgdisk (gdisk), mkfs.vfat (dosfstools), mcopy/mmd (mtools)" >&2
+        echo "Install them (e.g. apt-get install -y gdisk dosfstools mtools) or set ENABLE_UKI_IMAGE=0" >&2
         exit 1
     fi
 fi
 
 if [ x$DSTACK_TAR_RELEASE = x1 ]; then
-    IMAGE_TAR_MR=${DIST_DIR}/mr_$(cat ${OUTPUT_DIR}/digest.txt | tr -d '\n').tar.gz
-    IMAGE_TAR_NO_ROOTFS=${DIST_DIR}/${DIST_NAME}-${DSTACK_VERSION}-mr.tar.gz
     OUTPUT_DIR=$(realpath ${OUTPUT_DIR})
-    rm -rf ${IMAGE_TAR} ${IMAGE_TAR_MR} ${IMAGE_TAR_NO_ROOTFS}
-    echo "Archiving the output directory to ${IMAGE_TAR}"
-    (cd $(dirname ${OUTPUT_DIR}) && tar -czvf ${IMAGE_TAR} $(basename $OUTPUT_DIR))
+    PARENT_DIR=$(dirname ${OUTPUT_DIR})
+
+    # Bare metal tarball: all files except disk.raw and auth_hash.txt
+    rm -rf ${IMAGE_TAR}
+    echo "Archiving bare metal image to ${IMAGE_TAR}"
+    BARE_METAL_FILES="rootfs.img.parted.verity bzImage ovmf.fd digest.txt sha256sum.txt initramfs.cpio.gz metadata.json"
+    (cd "$PARENT_DIR" && tar -czvf ${IMAGE_TAR} $(for f in $BARE_METAL_FILES; do echo "$TAR_DIR_NAME/$f"; done))
     echo
+
+    # UKI tarball: only disk.raw and auth_hash.txt
+    if [[ "$UKI_CREATED" = "1" ]]; then
+        rm -rf ${IMAGE_TAR_UKI}
+        echo "Archiving UKI image to ${IMAGE_TAR_UKI}"
+        UKI_FILES="disk.raw auth_hash.txt"
+        (cd "$PARENT_DIR" && tar -czvf ${IMAGE_TAR_UKI} $(for f in $UKI_FILES; do echo "$TAR_DIR_NAME/$f"; done))
+        echo
+    fi
 fi
