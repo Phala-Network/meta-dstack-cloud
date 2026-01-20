@@ -1,6 +1,5 @@
 /build
 /bb-build
-!/bb-build/conf/multiconfig/
 *.qcow2
 __pycache__/
 /.target
