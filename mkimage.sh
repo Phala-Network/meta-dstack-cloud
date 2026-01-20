@@ -132,7 +132,7 @@ create_partitioned_rootfs() {
         set -e
         local align=$((1024 * 1024))
         local sector=512
-        local rootfs_size=$(stat -c %s "$rootfs_img")
+        local rootfs_size=$(stat -L -c %s "$rootfs_img")
         local rootfs_size_aligned=$(align_up $rootfs_size $align)
         local rootfs_start=$align
         # Leave extra room for GPT headers (1MB at start, 1MB at end)
@@ -160,7 +160,7 @@ build_uki_disk_image() {
         local sector=512
         local efi_size=$((256 * 1024 * 1024))
         local efi_size_aligned=$(align_up $efi_size $align)
-        local rootfs_size=$(stat -c %s "$rootfs_img")
+        local rootfs_size=$(stat -L -c %s "$rootfs_img")
         local rootfs_size_aligned=$(align_up $rootfs_size $align)
         local efi_start=$align
         local rootfs_start=$((efi_start + efi_size_aligned))
