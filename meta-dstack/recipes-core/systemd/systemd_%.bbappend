@@ -1,6 +1,12 @@
 do_install:append() {
-    # Disable systemd-vconsole-setup.service
+    # Remove systemd-vconsole-setup entirely (no virtual console needed)
     rm -f ${D}${systemd_system_unitdir}/sysinit.target.wants/systemd-vconsole-setup.service
+    rm -f ${D}${systemd_system_unitdir}/systemd-vconsole-setup.service
+    rm -f ${D}${rootlibexecdir}/systemd/systemd-vconsole-setup
+    rm -f ${D}${nonarch_libdir}/udev/rules.d/90-vconsole.rules
+
+    # Disable EFI System Partition automount (not needed, causes UNSUPP error)
+    rm -f ${D}${nonarch_libdir}/systemd/system-generators/systemd-gpt-auto-generator
 
     # Ensure systemd-resolved waits for /var/volatile tmpfs and tmpfiles setup
     install -d ${D}${systemd_system_unitdir}/systemd-resolved.service.d
