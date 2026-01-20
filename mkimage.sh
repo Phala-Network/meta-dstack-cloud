@@ -97,13 +97,9 @@ calc_authenticode_hash() {
     python3 "$AUTHENTICODE_HASH_SCRIPT" "$file" 2>/dev/null || true
 }
 
-write_authenticode_hash_if_missing() {
+write_authenticode_hash() {
     local file="$1"
     local out_file="${file}.auth_hash.txt"
-
-    if [[ -f "$out_file" ]]; then
-        return 0
-    fi
 
     if [[ ! -f "$file" ]]; then
         return 0
@@ -201,7 +197,7 @@ create_uki_artifacts() {
     build_uki_disk_image "${uki_dir}/disk.raw" "$UKI_IMAGE" "$ROOTFS_IMAGE"
 
     # Calculate and copy auth hash
-    write_authenticode_hash_if_missing "$UKI_IMAGE"
+    write_authenticode_hash "$UKI_IMAGE"
     if [[ -f "${UKI_IMAGE}.auth_hash.txt" ]]; then
         cp "${UKI_IMAGE}.auth_hash.txt" "${uki_dir}/auth_hash.txt"
     fi
