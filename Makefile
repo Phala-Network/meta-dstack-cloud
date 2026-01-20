@@ -25,7 +25,7 @@ dist: images
 # Build common artifacts (shared across all flavors)
 # dstack-guest is built here to avoid concurrent build conflicts in multiconfig
 images-common:
-	bitbake virtual/kernel dstack-initramfs dstack-ovmf dstack-guest
+	bitbake virtual/kernel dstack-initramfs dstack-ovmf
 
 # Build flavor-specific artifacts using multiconfig (serial to avoid deadlock warnings)
 images-flavors:

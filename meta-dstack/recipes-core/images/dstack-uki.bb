@@ -30,8 +30,7 @@ DSTACK_FLAVOR ?= "prod"
 VERITY_IMAGE = "dstack-rootfs"
 VERITY_TYPE = "squashfs"
 
-# Output filename includes flavor to avoid conflicts between multiconfigs
-UKI_FILENAME = "${@'dstack-uki.efi' if d.getVar('DSTACK_FLAVOR') == 'prod' else 'dstack-uki-' + d.getVar('DSTACK_FLAVOR') + '.efi'}"
+UKI_FILENAME = "dstack-uki.efi"
 
 do_configure[noexec] = "1"
 do_compile[noexec] = "1"
