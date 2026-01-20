@@ -393,16 +393,7 @@ class CloudDeploymentManager:
                 if not os.path.isabs(search_path):
                     search_path = os.path.join(self.work_dir, search_path)
 
-                # Try new format first (auth_hash.txt in -uki directory)
-                hash_file = Path(search_path) / f"{local_image}-uki" / "auth_hash.txt"
-                if hash_file.exists():
-                    with open(hash_file, 'r') as f:
-                        os_image_hash = f.read().strip()
-                    logger.info(f"Read OS image hash from {hash_file}")
-                    break
-
-                # Fall back to legacy format
-                hash_file = Path(search_path) / local_image / "dstack-uki.efi.auth_hash.txt"
+                hash_file = Path(search_path) / local_image / "auth_hash.txt"
                 if hash_file.exists():
                     with open(hash_file, 'r') as f:
                         os_image_hash = f.read().strip()
@@ -912,10 +903,9 @@ class CloudDeploymentManager:
                 expanded = os.path.join(self.work_dir, expanded)
             expanded_paths.append(Path(expanded))
 
-        # Try different file name patterns (new -uki format first, then legacy gcp.tar.gz)
+        # Look for disk.raw in the image directory
         patterns = [
-            f"{local_image}-uki/disk.raw",
-            f"{local_image}/gcp.tar.gz",  # Legacy format
+            f"{local_image}/disk.raw",
         ]
 
         for search_path in expanded_paths:
@@ -955,8 +945,18 @@ class CloudDeploymentManager:
                 logger.info("Download cancelled")
                 return
 
-        # Download URL
-        download_url = f"https://download.dstack.org/os-images/{os_image}-uki.tar.gz"
+        # Extract version from os_image (e.g., dstack-cloud-nvidia-0.6.0 -> 0.6.0)
+        # Version is the last component after the last hyphen followed by digits
+        import re
+        version_match = re.search(r'-(\d+\.\d+\.\d+)$', os_image)
+        if not version_match:
+            logger.error(f"Could not extract version from image name: {os_image}")
+            logger.error("Expected format: dstack-cloud-<flavor>-<version> (e.g., dstack-cloud-nvidia-0.6.0)")
+            return
+        version = version_match.group(1)
+
+        # Download from GitHub releases
+        download_url = f"https://github.com/Phala-Network/meta-dstack-cloud/releases/download/v{version}/{os_image}-uki.tar.gz"
 
         logger.info(f"Downloading {os_image} UKI image from {download_url}...")
         logger.info(f"Target: {download_tar}")
@@ -982,13 +982,13 @@ class CloudDeploymentManager:
                 ["tar", "-xzf", str(download_tar), "-C", str(target_dir)],
                 check=True
             )
-            logger.info(f"Successfully extracted to {target_dir / os_image}-uki")
+            logger.info(f"Successfully extracted to {target_dir / os_image}")
         except subprocess.CalledProcessError as e:
             logger.error(f"Failed to extract image: {e}")
             raise
 
         # Verify the expected structure
-        expected_dir = target_dir / f"{os_image}-uki"
+        expected_dir = target_dir / os_image
         expected_disk = expected_dir / "disk.raw"
         if expected_disk.exists():
             logger.info(f"Image ready: {expected_disk}")
@@ -1033,9 +1033,6 @@ class CloudDeploymentManager:
                     f"Run 'dstack-cloud pull {app.os_image}' to download it."
                 )
 
-        # Determine if we have disk.raw (new format) or gcp.tar.gz (legacy format)
-        is_raw_disk = image_path.name == "disk.raw"
-
         # Use gcp_image as the GCP image name
         image_name = gcp_image
         local_mtime = image_path.stat().st_mtime
@@ -1074,29 +1071,22 @@ class CloudDeploymentManager:
                 need_upload = True
 
         if need_upload:
-            if is_raw_disk:
-                # New format: disk.raw needs to be compressed to tar.gz for upload
-                logger.info("Compressing disk.raw to tar.gz for upload...")
-                import tempfile
-                with tempfile.TemporaryDirectory() as tmpdir:
-                    tar_file = os.path.join(tmpdir, "disk.tar.gz")
-                    result = subprocess.run(
-                        ["tar", "-czvf", tar_file, "-C", str(image_path.parent), "disk.raw"],
-                        capture_output=True,
-                        text=True
-                    )
-                    if result.returncode != 0:
-                        raise RuntimeError(f"Failed to create tar.gz: {result.stderr}")
+            # Compress disk.raw to tar.gz for upload
+            logger.info("Compressing disk.raw to tar.gz for upload...")
+            import tempfile
+            with tempfile.TemporaryDirectory() as tmpdir:
+                tar_file = os.path.join(tmpdir, "disk.tar.gz")
+                result = subprocess.run(
+                    ["tar", "-czvf", tar_file, "-C", str(image_path.parent), "disk.raw"],
+                    capture_output=True,
+                    text=True
+                )
+                if result.returncode != 0:
+                    raise RuntimeError(f"Failed to create tar.gz: {result.stderr}")
 
-                    logger.info("Uploading boot image to GCS...")
-                    self._run_gsutil([
-                        "cp", tar_file, f"{config.bucket}/{image_name}.tar.gz"
-                    ])
-            else:
-                # Legacy format: gcp.tar.gz can be uploaded directly
                 logger.info("Uploading boot image to GCS...")
                 self._run_gsutil([
-                    "cp", str(image_path), f"{config.bucket}/{image_name}.tar.gz"
+                    "cp", tar_file, f"{config.bucket}/{image_name}.tar.gz"
                 ])
 
             # Delete existing image if present
@@ -2075,7 +2065,7 @@ Examples:
   dstack-cloud config-edit
 
   # Download OS image
-  dstack-cloud pull dstack-0.6.0
+  dstack-cloud pull dstack-cloud-0.6.0
 
   # Deploy VM
   dstack-cloud deploy
