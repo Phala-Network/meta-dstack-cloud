@@ -12,7 +12,6 @@ Supports local configuration files similar to git's working model.
 
 Usage:
     dstack-cloud new <name>              # Create a new project
-    dstack-cloud init                    # Initialize current directory
     dstack-cloud config-edit             # Edit global configuration
     dstack-cloud prepare                 # Generate shared files
     dstack-cloud deploy                  # Deploy VM to cloud
@@ -63,6 +62,7 @@ logger = logging.getLogger(__name__)
 APP_CONFIG_FILE = "app.json"
 STATE_FILE = "state.json"
 GLOBAL_CONFIG_PATH = os.path.expanduser("~/.config/dstack-cloud/config.json")
+DEFAULT_OS_IMAGE = "dstack-cloud-0.6.0"
 
 
 @dataclass
@@ -72,7 +72,7 @@ class App:
     name: str = "myapp"
 
     # OS image
-    os_image: str = "dstack-0.6.0"
+    os_image: str = DEFAULT_OS_IMAGE
 
     # GCP cloud configuration
     gcp_config: 'GcpConfig' = field(default_factory=lambda: GcpConfig())
@@ -141,7 +141,7 @@ class App:
 
         return {
             "name": "myapp",
-            "os_image": "dstack-0.6.0",
+            "os_image": DEFAULT_OS_IMAGE,
             "gcp_config": GcpConfig.get_template(),
             "instance_id_seed": instance_id_seed,
             "app_id": app_id,
@@ -299,11 +299,20 @@ class CloudDeploymentManager:
         # Save the updated app config
         self.save_app_config(app)
 
-    def load_app_config(self) -> App:
-        """Load application configuration."""
+    def load_app_config(self, required: bool = False) -> App:
+        """Load application configuration.
+
+        Args:
+            required: If True, raise error when app.json doesn't exist
+        """
         app_config_path = self.work_dir / APP_CONFIG_FILE
 
         if not app_config_path.exists():
+            if required:
+                raise FileNotFoundError(
+                    f"No {APP_CONFIG_FILE} found in {self.work_dir}. "
+                    f"Run 'dstack-cloud new <name>' to create a project."
+                )
             # Return default config if file doesn't exist
             return App()
 
@@ -587,42 +596,6 @@ class CloudDeploymentManager:
         logger.info(f"Project directory: {project_dir}")
         logger.info("")
 
-    def init(
-        self,
-        force: bool = False,
-        interactive: bool = True,
-        os_image: Optional[str] = None,
-        app_id: Optional[str] = None,
-        gateway_enabled: Optional[bool] = None,
-        key_provider: Optional[str] = None,
-        storage_fs: Optional[str] = None,
-        secure_time: Optional[bool] = None,
-        no_instance_id: Optional[bool] = None,
-        project: Optional[str] = None,
-        zone: Optional[str] = None,
-        instance_name: Optional[str] = None,
-        machine_type: Optional[str] = None,
-        data_size: Optional[int] = None
-    ) -> None:
-        """Initialize deployment configuration in current directory."""
-        self._init_project(
-            force=force,
-            interactive=interactive,
-            app_name=None,  # Will prompt in interactive mode
-            os_image=os_image,
-            app_id=app_id,
-            gateway_enabled=gateway_enabled,
-            key_provider=key_provider,
-            storage_fs=storage_fs,
-            secure_time=secure_time,
-            no_instance_id=no_instance_id,
-            project=project,
-            zone=zone,
-            instance_name=instance_name,
-            machine_type=machine_type,
-            data_size=data_size
-        )
-
     def _init_project(
         self,
         force: bool = False,
@@ -641,14 +614,14 @@ class CloudDeploymentManager:
         machine_type: Optional[str] = None,
         data_size: Optional[int] = None
     ) -> None:
-        """Initialize project configuration (shared implementation for init and new)."""
+        """Initialize project configuration."""
         # Interactive prompts for required fields (only if not provided via CLI)
         instance_name_cli = instance_name
 
         if interactive:
             print(f"\n=== dstack-cloud Project Initialization ===\n")
 
-            # Prompt for app name (only for init command, new command provides it)
+            # Prompt for app name if not provided
             if app_name is None:
                 while True:
                     app_name = input("App name [myapp]: ").strip()
@@ -822,8 +795,8 @@ class CloudDeploymentManager:
         """Generate all files in shared directory."""
         import secrets
 
-        # Load app config
-        app = self.load_app_config()
+        # Load app config (required)
+        app = self.load_app_config(required=True)
 
         # Ensure instance_id_seed and app_id exist
         if not app.instance_id_seed:
@@ -1304,8 +1277,23 @@ class CloudDeploymentManager:
     def deploy(self, delete_existing: bool = False,
                force_boot_image: bool = False) -> None:
         """Deploy VM to GCP."""
+        # Load app config first (required) - validates project exists
+        app = self.load_app_config(required=True)
         config = self.load_gcp_config()
-        app = self.load_app_config()
+
+        # Validate required configuration
+        missing = []
+        if not config.instance_name:
+            missing.append("instance_name")
+        if not config.project:
+            missing.append("project")
+        if not config.zone:
+            missing.append("zone")
+        if missing:
+            raise ValueError(
+                f"Missing required GCP configuration: {', '.join(missing)}. "
+                f"Run 'dstack-cloud new <name>' to create a project or edit dstack-app.json."
+            )
 
         # Auto-detect bucket if not specified
         if not config.bucket and config.project:
@@ -2053,19 +2041,16 @@ def main():
     parser = argparse.ArgumentParser(
         description="Multi-cloud VM lifecycle management tool",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
+        epilog=f"""
 Examples:
   # Create a new project
   dstack-cloud new myproject
-
-  # Initialize current directory
-  dstack-cloud init
 
   # Edit global configuration
   dstack-cloud config-edit
 
   # Download OS image
-  dstack-cloud pull dstack-cloud-0.6.0
+  dstack-cloud pull {DEFAULT_OS_IMAGE}
 
   # Deploy VM
   dstack-cloud deploy
@@ -2102,7 +2087,7 @@ Examples:
     new_parser.add_argument("name", type=str, help="Project name")
 
     # App configuration options
-    new_parser.add_argument("--os-image", type=str, help="OS image (e.g., dstack-0.6.0)")
+    new_parser.add_argument("--os-image", type=str, help=f"OS image (e.g., {DEFAULT_OS_IMAGE})")
     new_parser.add_argument("--app-id", type=str, help="Application ID (40 hex chars)")
     new_parser.add_argument("--gateway-enabled", "--gw", dest="gateway_enabled", action="store_true", help="Enable dstack-gateway")
     new_parser.add_argument("--no-gateway-enabled", "--no-gw", dest="gateway_enabled", action="store_false")
@@ -2121,31 +2106,6 @@ Examples:
     new_parser.add_argument("--machine-type", "-m", type=str, help="Machine type (e.g., c3-standard-4)")
     new_parser.add_argument("--data-size", type=int, help="Data disk size in GB")
 
-    # init command
-    init_parser = subparsers.add_parser("init", help="Initialize deployment configuration")
-    init_parser.add_argument("--force", "-f", action="store_true", help="Overwrite existing config")
-    init_parser.add_argument("--non-interactive", "-n", action="store_true", help="Skip interactive prompts")
-
-    # App configuration options (same as new)
-    init_parser.add_argument("--os-image", type=str, help="OS image (e.g., dstack-0.6.0)")
-    init_parser.add_argument("--app-id", type=str, help="Application ID (40 hex chars)")
-    init_parser.add_argument("--gateway-enabled", "--gw", dest="gateway_enabled", action="store_true", help="Enable dstack-gateway")
-    init_parser.add_argument("--no-gateway-enabled", "--no-gw", dest="gateway_enabled", action="store_false")
-    init_parser.set_defaults(gateway_enabled=None)
-    init_parser.add_argument("--key-provider", "--kp", type=str, choices=["kms", "local", "tpm", "none"], help="Key provider type")
-    init_parser.add_argument("--storage-fs", "--fs", dest="storage_fs", type=str, choices=["ext4", "zfs"], help="Storage filesystem")
-    init_parser.add_argument("--secure-time", action="store_true", help="Enable secure time synchronization")
-    init_parser.add_argument("--no-secure-time", dest="secure_time", action="store_false")
-    init_parser.set_defaults(secure_time=None)
-    init_parser.add_argument("--no-instance-id", action="store_true", help="Disable instance ID generation")
-
-    # GCP configuration options (same as new)
-    init_parser.add_argument("--project", "-p", type=str, help="GCP project ID")
-    init_parser.add_argument("--zone", "-z", type=str, help="GCP zone (e.g., us-central1-a)")
-    init_parser.add_argument("--instance-name", type=str, help="GCP instance name")
-    init_parser.add_argument("--machine-type", "-m", type=str, help="Machine type (e.g., c3-standard-4)")
-    init_parser.add_argument("--data-size", type=int, help="Data disk size in GB")
-
     # config-edit command
     subparsers.add_parser("config-edit", help="Edit global configuration")
 
@@ -2154,7 +2114,7 @@ Examples:
 
     # pull command
     pull_parser = subparsers.add_parser("pull", help="Download OS image")
-    pull_parser.add_argument("image", type=str, help="OS image name (e.g., dstack-0.6.0)")
+    pull_parser.add_argument("image", type=str, help=f"OS image name (e.g., {DEFAULT_OS_IMAGE})")
 
     # deploy command
     deploy_parser = subparsers.add_parser("deploy", help="Deploy VM to cloud")
@@ -2231,23 +2191,6 @@ Examples:
         if args.command == "new":
             manager.new(
                 args.name,
-                os_image=args.os_image,
-                app_id=args.app_id,
-                gateway_enabled=args.gateway_enabled,
-                key_provider=args.key_provider,
-                storage_fs=args.storage_fs,
-                secure_time=args.secure_time,
-                no_instance_id=args.no_instance_id,
-                project=args.project,
-                zone=args.zone,
-                instance_name=args.instance_name,
-                machine_type=args.machine_type,
-                data_size=args.data_size
-            )
-        elif args.command == "init":
-            manager.init(
-                force=args.force,
-                interactive=not args.non_interactive,
                 os_image=args.os_image,
                 app_id=args.app_id,
                 gateway_enabled=args.gateway_enabled,
