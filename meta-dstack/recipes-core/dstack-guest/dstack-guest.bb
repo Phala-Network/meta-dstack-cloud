@@ -13,7 +13,7 @@ S = "${UNPACKDIR}/dstack"
 
 RDEPENDS:${PN} += "bash"
 
-DEPENDS += "rsync-native libtss2-dev"
+DEPENDS += "rsync-native"
 
 # Ensure rsync-native is built before unpack runs
 do_unpack[depends] += "rsync-native:do_populate_sysroot"
