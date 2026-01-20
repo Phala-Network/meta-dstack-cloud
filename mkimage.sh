@@ -72,7 +72,9 @@ IMAGE_TAR=${IMAGE_TAR:-"${DIST_DIR}/${DIST_NAME}-${DSTACK_VERSION}.tar.gz"}
 IMAGE_TAR_UKI="${DIST_DIR}/${DIST_NAME}-${DSTACK_VERSION}-uki.tar.gz"
 TAR_DIR_NAME="${DIST_NAME}-${DSTACK_VERSION}"
 
-AUTHENTICODE_HASH_SCRIPT="${BB_BUILD_DIR}/../scripts/bin/authenticode_hash.py"
+# Use script's directory to find authenticode_hash.py
+SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+AUTHENTICODE_HASH_SCRIPT="${SCRIPT_DIR}/scripts/bin/authenticode_hash.py"
 
 verbose() {
     echo "$@"
