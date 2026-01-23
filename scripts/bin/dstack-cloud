@@ -43,14 +43,24 @@ from typing import Optional, List, Dict, Any
 
 # Try to import cryptography libraries for env encryption
 CRYPTO_AVAILABLE = False
+ETH_CRYPTO_AVAILABLE = False
 try:
     from cryptography.hazmat.primitives.ciphers.aead import AESGCM
     from cryptography.hazmat.primitives.asymmetric import x25519
-    from cryptography.hazmat.backends import default_backend
-    from cryptography import serialization
+    from cryptography.hazmat.primitives import serialization
     CRYPTO_AVAILABLE = True
-except ImportError:
-    CRYPTO_AVAILABLE = False
+except Exception:
+    pass
+
+try:
+    from eth_keys import keys
+    from eth_utils import keccak
+    ETH_CRYPTO_AVAILABLE = True
+except Exception:
+    pass
+
+# Default whitelist file location
+DEFAULT_KMS_WHITELIST_PATH = os.path.expanduser("~/.config/dstack-cloud/kms-whitelist.json")
 
 logging.basicConfig(
     level=logging.INFO,
@@ -1440,7 +1450,7 @@ class CloudDeploymentManager:
         if not CRYPTO_AVAILABLE:
             raise ImportError(
                 "Cryptography libraries not available. Please install:\n"
-                "pip install cryptography"
+                "pip install cryptography eth-keys 'eth-hash[pycryptodome]'"
             )
 
         # Serialize environment variables to JSON
@@ -1481,6 +1491,7 @@ class CloudDeploymentManager:
         try:
             import urllib.request
             import urllib.error
+            import ssl
 
             path = f"{kms_url}/prpc/GetAppEnvEncryptPubKey?json"
             data = json.dumps({"app_id": app_id}).encode("utf-8")
@@ -1491,18 +1502,114 @@ class CloudDeploymentManager:
                 headers={"Content-Type": "application/json"}
             )
 
+            # Allow self-signed certificates for KMS server
+            ssl_context = ssl.create_default_context()
+            ssl_context.check_hostname = False
+            ssl_context.verify_mode = ssl.CERT_NONE
+
             logger.info(f"Getting encryption public key for {app_id} from {kms_url}")
-            with urllib.request.urlopen(req, timeout=10) as response:
+            with urllib.request.urlopen(req, timeout=10, context=ssl_context) as response:
                 response_data = json.loads(response.read().decode("utf-8"))
 
             if "public_key" not in response_data:
                 raise ValueError(f"No public_key in response: {response_data}")
+
+            # Verify signature if available
+            if "signature" not in response_data:
+                if not self._confirm_untrusted_signer("none"):
+                    raise ValueError("Aborted due to missing signature")
+                return response_data["public_key"]
+
+            public_key = bytes.fromhex(response_data["public_key"])
+            signature = bytes.fromhex(response_data["signature"])
+
+            signer_pubkey = self._verify_signature(public_key, signature, app_id)
+            if signer_pubkey:
+                whitelist = self._load_whitelist()
+                if whitelist and signer_pubkey not in whitelist:
+                    logger.warning(f"Signer {signer_pubkey} is not in the trusted whitelist!")
+                    if not self._confirm_untrusted_signer(signer_pubkey):
+                        raise ValueError("Aborted due to untrusted signer")
+                else:
+                    logger.info(f"Verified signature from: {signer_pubkey}")
+            else:
+                logger.warning("Could not verify signature!")
+                if not self._confirm_untrusted_signer("unknown"):
+                    raise ValueError("Aborted due to invalid signature")
 
             return response_data["public_key"]
 
         except Exception as e:
             logger.warning(f"Failed to get encryption public key: {e}")
             raise
+
+    def _verify_signature(self, public_key: bytes, signature: bytes, app_id: str) -> Optional[str]:
+        """Verify the signature of a public key.
+
+        Args:
+            public_key: The public key bytes to verify
+            signature: The signature bytes
+            app_id: The application ID
+
+        Returns:
+            The compressed public key if valid, None otherwise
+        """
+        if not ETH_CRYPTO_AVAILABLE:
+            logger.warning("eth-keys not available, skipping signature verification. "
+                           "Install with: pip install eth-keys 'eth-hash[pycryptodome]'")
+            return None
+
+        if len(signature) != 65:
+            return None
+
+        # Create the message to verify
+        prefix = b"dstack-env-encrypt-pubkey"
+        if app_id.startswith("0x"):
+            app_id = app_id[2:]
+        message = prefix + b":" + bytes.fromhex(app_id) + public_key
+
+        # Hash the message with Keccak-256 and recover the public key
+        try:
+            message_hash = keccak(message)
+            sig = keys.Signature(signature_bytes=signature)
+            recovered_key = sig.recover_public_key_from_msg_hash(message_hash)
+            return '0x' + recovered_key.to_compressed_bytes().hex()
+        except Exception as e:
+            error_msg = str(e)
+            if "hashing backends" in error_msg or "pycryptodome" in error_msg:
+                raise ImportError(
+                    "Ethereum hashing backend not available. Please install:\n"
+                    "pip install cryptography eth-keys 'eth-hash[pycryptodome]'"
+                )
+            logger.debug(f"Signature verification failed: {e}")
+            return None
+
+    def _confirm_untrusted_signer(self, signer: str) -> bool:
+        """Ask user to confirm using an untrusted signer."""
+        try:
+            response = input(f"Continue with untrusted signer '{signer}'? (y/N): ")
+            return response.lower() in ('y', 'yes')
+        except EOFError:
+            # Non-interactive mode, reject untrusted signers
+            return False
+
+    def _load_whitelist(self) -> List[str]:
+        """Load the whitelist of trusted signers from a file."""
+        if not os.path.exists(DEFAULT_KMS_WHITELIST_PATH):
+            return []
+
+        try:
+            with open(DEFAULT_KMS_WHITELIST_PATH, 'r') as f:
+                data = json.load(f)
+                return data.get('trusted_signers', [])
+        except (json.JSONDecodeError, FileNotFoundError):
+            return []
+
+    def _save_whitelist(self, whitelist: List[str]) -> None:
+        """Save the whitelist of trusted signers to a file."""
+        os.makedirs(os.path.dirname(DEFAULT_KMS_WHITELIST_PATH), exist_ok=True)
+        with open(DEFAULT_KMS_WHITELIST_PATH, 'w') as f:
+            json.dump({'trusted_signers': whitelist}, f, indent=2)
 
     def _derive_instance_id(self, instance_id_seed: str, app_id: str) -> str:
         """Derive instance_id from instance_id_seed and app_id.
