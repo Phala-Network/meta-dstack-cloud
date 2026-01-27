@@ -60,6 +60,7 @@ do_install() {
     install -m 0755 ${CARGO_BINDIR}/dstack-util ${D}${bindir}
     install -m 0755 ${CARGO_BINDIR}/dstack-guest-agent ${D}${bindir}
     install -m 0755 ${S}/basefiles/dstack-prepare.sh ${D}${bindir}
+    install -m 0755 ${S}/basefiles/ephemeral-docker.sh ${D}${bindir}
     install -m 0755 ${S}/basefiles/wg-checker.sh ${D}${bindir}
     install -m 0755 ${S}/basefiles/app-compose.sh ${D}${bindir}
     install -m 0755 ${S}/docker-daemon.json ${D}${sysconfdir}/docker/daemon.json
