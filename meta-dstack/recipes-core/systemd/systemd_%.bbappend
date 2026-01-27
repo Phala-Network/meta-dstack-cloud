@@ -19,3 +19,9 @@ EOF
 
 SYSTEMD_SERVICE:${PN}-vconsole-setup = ""
 PACKAGECONFIG:remove = "sysvinit logind"
+
+# Create a minimal package with only systemd-socket-proxyd
+# This avoids pulling in all of systemd-extra-utils
+PACKAGES =+ "${PN}-socket-proxyd"
+FILES:${PN}-socket-proxyd = "${nonarch_libdir}/systemd/systemd-socket-proxyd"
+RDEPENDS:${PN}-socket-proxyd = "${PN}"
