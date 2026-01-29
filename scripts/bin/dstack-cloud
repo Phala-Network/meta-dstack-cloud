@@ -1159,7 +1159,7 @@ class CloudDeploymentManager:
 
                 # Save to shared/.encrypted-env
                 encrypted_file = shared_dir / ".encrypted-env"
-                with open(encrypted_file, 'w') as f:
+                with open(encrypted_file, 'wb') as f:
                     f.write(encrypted_env)
                 logger.info(f"Encrypted {app.env_file} -> {encrypted_file}")
             else:
@@ -1436,7 +1436,7 @@ class CloudDeploymentManager:
                 envs[key.strip()] = value.strip()
         return envs
 
-    def _encrypt_env(self, envs: Dict[str, str], hex_public_key: str) -> str:
+    def _encrypt_env(self, envs: Dict[str, str], hex_public_key: str) -> bytes:
         """
         Encrypt environment variables using X25519 key exchange and AES-GCM.
 
@@ -1445,7 +1445,7 @@ class CloudDeploymentManager:
             hex_public_key: Remote encryption public key in hexadecimal format
 
         Returns:
-            Hex string of (ephemeral public key || IV || ciphertext)
+            Raw bytes of (ephemeral public key || IV || ciphertext)
         """
         if not CRYPTO_AVAILABLE:
             raise ImportError(
@@ -1453,8 +1453,9 @@ class CloudDeploymentManager:
                 "pip install cryptography eth-keys 'eth-hash[pycryptodome]'"
             )
 
-        # Serialize environment variables to JSON
-        envs_json = json.dumps({"env": envs}).encode("utf-8")
+        # Serialize environment variables to JSON (format: {"env": [{"key": k, "value": v}, ...]})
+        env_pairs = [{"key": k, "value": v} for k, v in envs.items()]
+        envs_json = json.dumps({"env": env_pairs}).encode("utf-8")
 
         # Remove "0x" prefix if present
         if hex_public_key.startswith("0x"):
@@ -1484,7 +1485,7 @@ class CloudDeploymentManager:
 
         # Combine ephemeral public key, IV, and ciphertext
         result = ephemeral_public_bytes + iv + ciphertext
-        return result.hex()
+        return result
 
     def _get_app_encrypt_pub_key(self, app_id: str, kms_url: str) -> str:
         """Get encryption public key for the specified app_id from KMS."""
