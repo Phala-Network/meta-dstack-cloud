@@ -20,6 +20,7 @@ IMAGE_INSTALL = "\
     chrony \
     chronyc \
     dstack-zfs \
+    dstack-sysbox \
     kernel-module-tun \
     kernel-module-fuse \
     kernel-module-br-netfilter \
