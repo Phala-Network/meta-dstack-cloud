@@ -905,7 +905,7 @@ class CloudDeploymentManager:
         return None
 
     def pull(self, os_image: str) -> None:
-        """Download UKI image from remote repository."""
+        """Download UKI image from remote repository or an absolute URL."""
         global_config = self._load_global_config()
         search_paths = global_config.get("image_search_paths", [])
 
@@ -918,8 +918,30 @@ class CloudDeploymentManager:
         target_dir = Path(os.path.expanduser(search_paths[0]))
         target_dir.mkdir(parents=True, exist_ok=True)
 
-        # Download UKI tar file (e.g., dstack-cloud-nvidia-0.6.0-uki.tar.gz)
-        download_tar = target_dir / f"{os_image}-uki.tar.gz"
+        # Check if os_image is an absolute URL
+        if os_image.startswith("http://") or os_image.startswith("https://"):
+            download_url = os_image
+            # Derive image name from URL filename
+            url_filename = download_url.rsplit("/", 1)[-1]
+            if url_filename.endswith("-uki.tar.gz"):
+                os_image = url_filename[:-len("-uki.tar.gz")]
+            elif url_filename.endswith(".tar.gz"):
+                os_image = url_filename[:-len(".tar.gz")]
+            else:
+                os_image = url_filename
+            download_tar = target_dir / url_filename
+        else:
+            # Extract version from os_image (e.g., dstack-cloud-nvidia-0.6.0 -> 0.6.0)
+            # Version is the last component after the last hyphen followed by digits
+            import re
+            version_match = re.search(r'-(\d+\.\d+\.\d+)$', os_image)
+            if not version_match:
+                logger.error(f"Could not extract version from image name: {os_image}")
+                logger.error("Expected format: dstack-cloud-<flavor>-<version> (e.g., dstack-cloud-nvidia-0.6.0)")
+                return
+            version = version_match.group(1)
+            download_url = f"https://github.com/Phala-Network/meta-dstack-cloud/releases/download/v{version}/{os_image}-uki.tar.gz"
+            download_tar = target_dir / f"{os_image}-uki.tar.gz"
 
         if download_tar.exists():
             logger.info(f"Download file already exists: {download_tar}")
@@ -927,19 +949,6 @@ class CloudDeploymentManager:
             if response != 'y':
                 logger.info("Download cancelled")
                 return
-
-        # Extract version from os_image (e.g., dstack-cloud-nvidia-0.6.0 -> 0.6.0)
-        # Version is the last component after the last hyphen followed by digits
-        import re
-        version_match = re.search(r'-(\d+\.\d+\.\d+)$', os_image)
-        if not version_match:
-            logger.error(f"Could not extract version from image name: {os_image}")
-            logger.error("Expected format: dstack-cloud-<flavor>-<version> (e.g., dstack-cloud-nvidia-0.6.0)")
-            return
-        version = version_match.group(1)
-
-        # Download from GitHub releases
-        download_url = f"https://github.com/Phala-Network/meta-dstack-cloud/releases/download/v{version}/{os_image}-uki.tar.gz"
 
         logger.info(f"Downloading {os_image} UKI image from {download_url}...")
         logger.info(f"Target: {download_tar}")
@@ -2222,7 +2231,7 @@ Examples:
 
     # pull command
     pull_parser = subparsers.add_parser("pull", help="Download OS image")
-    pull_parser.add_argument("image", type=str, help=f"OS image name (e.g., {DEFAULT_OS_IMAGE})")
+    pull_parser.add_argument("image", type=str, help=f"OS image name (e.g., {DEFAULT_OS_IMAGE}) or absolute URL (e.g., https://example.com/image-uki.tar.gz)")
 
     # deploy command
     deploy_parser = subparsers.add_parser("deploy", help="Deploy VM to cloud")
