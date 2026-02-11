@@ -1378,8 +1378,14 @@ class CloudDeploymentManager:
             create_args.append(f"--network={config.network}")
         if config.subnet:
             create_args.append(f"--subnet={config.subnet}")
-        if config.tags:
-            create_args.append(f"--tags={','.join(config.tags)}")
+        # Always attach firewall tag so existing firewall rules continue to work
+        # after instance recreation (e.g. deploy --delete).
+        instance_tags = list(config.tags)
+        firewall_tag = f"fw-{config.instance_name}"
+        if firewall_tag not in instance_tags:
+            instance_tags.append(firewall_tag)
+        if instance_tags:
+            create_args.append(f"--tags={','.join(instance_tags)}")
         if config.labels:
             labels_str = ",".join(f"{k}={v}" for k, v in config.labels.items())
             create_args.append(f"--labels={labels_str}")
@@ -1986,7 +1992,16 @@ class CloudDeploymentManager:
         instance_tag = f"fw-{instance_name}"
 
         state = self.load_state()
-        zone = state.zone if state else "us-central1-a"
+        zone = state.zone if state and state.zone else ""
+        if not zone:
+            try:
+                config = self.load_gcp_config()
+                zone = config.zone
+            except FileNotFoundError:
+                pass
+        if not zone:
+            global_config = self._load_global_config()
+            zone = global_config.get("gcp", {}).get("zone", "us-central1-a")
 
         result = self._run_gcloud([
             "compute", "instances", "describe", instance_name,
