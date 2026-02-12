@@ -687,6 +687,8 @@ class CloudDeploymentManager:
             app_template["gateway_enabled"] = False
             # Also set no_instance_id=True when KMS is not available
             app_template["no_instance_id"] = True
+            # Remove env_file since .env is only supported in KMS mode
+            app_template.pop("env_file", None)
         if storage_fs is not None:
             app_template["storage_fs"] = storage_fs
         if secure_time is not None:
