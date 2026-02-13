@@ -1844,8 +1844,10 @@ class CloudDeploymentManager:
             f"--project={state.project}"
         ], check=False)
         if result.returncode != 0:
-            logger.info(f"Instance {state.instance_name} does not exist (already removed?).")
-            return
+            if "was not found" in result.stderr:
+                logger.info(f"Instance {state.instance_name} does not exist (already removed?).")
+                return
+            raise RuntimeError(f"gcloud command failed: {result.stderr}")
 
         logger.info(f"Stopping instance {state.instance_name}...")
         self._run_gcloud([
@@ -1871,10 +1873,12 @@ class CloudDeploymentManager:
             f"--project={state.project}"
         ], check=False)
         if result.returncode != 0:
-            raise ValueError(
-                f"Instance {state.instance_name} does not exist. "
-                f"Run 'dstack-cloud deploy' to create it."
-            )
+            if "was not found" in result.stderr:
+                raise ValueError(
+                    f"Instance {state.instance_name} does not exist. "
+                    f"Run 'dstack-cloud deploy' to create it."
+                )
+            raise RuntimeError(f"gcloud command failed: {result.stderr}")
 
         logger.info(f"Starting instance {state.instance_name}...")
         self._run_gcloud([
