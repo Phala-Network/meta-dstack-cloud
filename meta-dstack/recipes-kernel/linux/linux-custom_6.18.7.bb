@@ -16,6 +16,7 @@ DEPENDS += "libyaml-native openssl-native util-linux-native elfutils-native"
 SRC_URI = "https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-${PV}.tar.xz;downloadfilename=linux-${PV}.tar.xz \
            file://defconfig \
            file://0001-x86-tdx-select-dma-direct-remap.patch \
+           file://0002-overlayfs-enable-idmapped-mounts.patch \
 "
 
 SRC_URI[sha256sum] = "b726a4d15cf9ae06219b56d87820776e34d89fbc137e55fb54a9b9c3015b8f1e"
