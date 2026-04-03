@@ -197,6 +197,10 @@ class GcpConfig:
     network: str = "default"
     subnet: str = ""
 
+    # Identity settings
+    service_account: str = ""
+    scopes: List[str] = field(default_factory=list)
+
     # Tags and labels
     tags: List[str] = field(default_factory=list)
     labels: Dict[str, str] = field(default_factory=dict)
@@ -225,6 +229,8 @@ class GcpConfig:
             "bucket": "",
             "network": "default",
             "subnet": "",
+            "service_account": "",
+            "scopes": [],
             "tags": [],
             "labels": {}
         }
@@ -1380,6 +1386,10 @@ class CloudDeploymentManager:
             create_args.append(f"--network={config.network}")
         if config.subnet:
             create_args.append(f"--subnet={config.subnet}")
+        if config.service_account:
+            create_args.append(f"--service-account={config.service_account}")
+        if config.scopes:
+            create_args.append(f"--scopes={','.join(config.scopes)}")
         # Always attach firewall tag so existing firewall rules continue to work
         # after instance recreation (e.g. deploy --delete).
         instance_tags = list(config.tags)
