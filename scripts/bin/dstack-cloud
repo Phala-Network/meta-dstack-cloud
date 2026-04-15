@@ -68,6 +68,23 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+DEFAULT_PRELAUNCH_SCRIPT = """#!/bin/sh
+# Prelaunch script - runs before starting containers
+EXPECTED_TOKEN_HASH=$(jq -j .launch_token_hash app-compose.json)
+if [ "$EXPECTED_TOKEN_HASH" = "null" ]; then
+    echo "Skipped APP_LAUNCH_TOKEN check"
+else
+    ACTUAL_TOKEN_HASH=$(echo -n "$APP_LAUNCH_TOKEN" | sha256sum | cut -d' ' -f1)
+    if [ "$EXPECTED_TOKEN_HASH" != "$ACTUAL_TOKEN_HASH" ]; then
+        echo "Error: Incorrect APP_LAUNCH_TOKEN, please make sure set the correct APP_LAUNCH_TOKEN in env"
+        reboot
+        exit 1
+    else
+        echo "APP_LAUNCH_TOKEN checked OK"
+    fi
+fi
+"""
+
 # Configuration file names
 APP_CONFIG_FILE = "app.json"
 STATE_FILE = "state.json"
@@ -341,6 +358,34 @@ class CloudDeploymentManager:
         with open(app_config_path, 'w') as f:
             json.dump(app.to_dict(), f, indent=2)
 
+    def _apply_env_metadata_to_compose(
+        self, app_compose: Dict[str, Any], envs: Optional[Dict[str, str]] = None,
+        env_names: Optional[List[str]] = None
+    ) -> Dict[str, Any]:
+        """Sync compose metadata derived from encrypted env vars."""
+        allowed_envs = list(app_compose.get("allowed_envs", []))
+
+        if env_names:
+            allowed_envs.extend(env_names)
+
+        if envs:
+            allowed_envs.extend(envs.keys())
+
+        if allowed_envs:
+            app_compose["allowed_envs"] = list(dict.fromkeys(allowed_envs))
+        else:
+            app_compose["allowed_envs"] = []
+
+        launch_token_value = (envs or {}).get("APP_LAUNCH_TOKEN")
+        if launch_token_value is not None:
+            app_compose["launch_token_hash"] = hashlib.sha256(
+                launch_token_value.encode("utf-8")
+            ).hexdigest()
+        else:
+            app_compose.pop("launch_token_hash", None)
+
+        return app_compose
+
     def _generate_app_compose(self, app: App, env_names: Optional[List[str]] = None) -> Dict[str, Any]:
         """Generate app-compose.json content from App configuration."""
         # Read docker-compose.yaml content
@@ -359,14 +404,7 @@ class CloudDeploymentManager:
             with open(prelaunch_path, 'r') as f:
                 prelaunch_content = f.read()
 
-        # Merge app.allowed_envs with env_names from .env file
-        allowed_envs = list(app.allowed_envs) if app.allowed_envs else []
-        if env_names:
-            allowed_envs.extend(env_names)
-            # Remove duplicates
-            allowed_envs = list(set(allowed_envs))
-
-        return {
+        app_compose = {
             "manifest_version": 2,
             "name": app.name,
             "runner": "docker-compose",
@@ -376,13 +414,14 @@ class CloudDeploymentManager:
             "public_sysinfo": app.public_sysinfo,
             "public_tcbinfo": app.public_tcbinfo,
             "key_provider_id": app.key_provider_id,
-            "allowed_envs": allowed_envs,
             "no_instance_id": app.no_instance_id,
             "secure_time": app.secure_time,
             "key_provider": app.key_provider,
             "storage_fs": app.storage_fs,
             "pre_launch_script": prelaunch_content
         }
+        app_compose["allowed_envs"] = list(app.allowed_envs) if app.allowed_envs else []
+        return self._apply_env_metadata_to_compose(app_compose, env_names=env_names)
 
     def _generate_sys_config(self, global_config: Dict[str, Any],
                              gcp_config: GcpConfig, app: App) -> Dict[str, Any]:
@@ -737,8 +776,7 @@ class CloudDeploymentManager:
         prelaunch = self.work_dir / "prelaunch.sh"
         if not prelaunch.exists() or force:
             with open(prelaunch, 'w') as f:
-                f.write("#!/bin/sh\n")
-                f.write("# Prelaunch script - runs before starting containers\n")
+                f.write(DEFAULT_PRELAUNCH_SCRIPT)
             os.chmod(prelaunch, 0o755)
 
         # Create .env template at project root (only for KMS mode)
@@ -859,6 +897,7 @@ class CloudDeploymentManager:
         # Process .env file to collect env_names
         env_path = self.work_dir / app.env_file
         env_names = []
+        envs = {}
         if env_path.exists():
             envs = self._parse_env_file(env_path)
             if envs:
@@ -869,6 +908,7 @@ class CloudDeploymentManager:
 
         # Generate app-compose.json
         app_compose_content = self._generate_app_compose(app, env_names=env_names if env_names else None)
+        self._apply_env_metadata_to_compose(app_compose_content, envs=envs)
         app_compose_path = shared_dir / "app-compose.json"
         with open(app_compose_path, 'w') as f:
             json.dump(app_compose_content, f, indent=2)
@@ -1146,6 +1186,7 @@ class CloudDeploymentManager:
         # Process .env file: encrypt and save to shared/.encrypted-env
         env_path = self.work_dir / app.env_file
         env_names = []  # Collect environment variable names for allowed_envs
+        envs = {}
 
         if env_path.exists():
             if app.key_provider != "kms":
@@ -1203,6 +1244,7 @@ class CloudDeploymentManager:
 
         # Generate app-compose.json with env_names (from .env file)
         app_compose_content = self._generate_app_compose(app, env_names=env_names if env_names else None)
+        self._apply_env_metadata_to_compose(app_compose_content, envs=envs)
         app_compose_path = shared_dir / "app-compose.json"
         with open(app_compose_path, 'w') as f:
             json.dump(app_compose_content, f, indent=2)
