@@ -77,7 +77,6 @@ else
     ACTUAL_TOKEN_HASH=$(echo -n "$APP_LAUNCH_TOKEN" | sha256sum | cut -d' ' -f1)
     if [ "$EXPECTED_TOKEN_HASH" != "$ACTUAL_TOKEN_HASH" ]; then
         echo "Error: Incorrect APP_LAUNCH_TOKEN, please make sure set the correct APP_LAUNCH_TOKEN in env"
-        reboot
         exit 1
     else
         echo "APP_LAUNCH_TOKEN checked OK"
@@ -361,7 +360,7 @@ class CloudDeploymentManager:
     def _apply_env_metadata_to_compose(
         self, app_compose: Dict[str, Any], envs: Optional[Dict[str, str]] = None,
         env_names: Optional[List[str]] = None
-    ) -> Dict[str, Any]:
+    ) -> None:
         """Sync compose metadata derived from encrypted env vars."""
         allowed_envs = list(app_compose.get("allowed_envs", []))
 
@@ -371,10 +370,7 @@ class CloudDeploymentManager:
         if envs:
             allowed_envs.extend(envs.keys())
 
-        if allowed_envs:
-            app_compose["allowed_envs"] = list(dict.fromkeys(allowed_envs))
-        else:
-            app_compose["allowed_envs"] = []
+        app_compose["allowed_envs"] = list(dict.fromkeys(allowed_envs))
 
         launch_token_value = (envs or {}).get("APP_LAUNCH_TOKEN")
         if launch_token_value is not None:
@@ -384,9 +380,7 @@ class CloudDeploymentManager:
         else:
             app_compose.pop("launch_token_hash", None)
 
-        return app_compose
-
-    def _generate_app_compose(self, app: App, env_names: Optional[List[str]] = None) -> Dict[str, Any]:
+    def _generate_app_compose(self, app: App) -> Dict[str, Any]:
         """Generate app-compose.json content from App configuration."""
         # Read docker-compose.yaml content
         docker_compose_path = self.work_dir / app.docker_compose_file
@@ -404,7 +398,7 @@ class CloudDeploymentManager:
             with open(prelaunch_path, 'r') as f:
                 prelaunch_content = f.read()
 
-        app_compose = {
+        return {
             "manifest_version": 2,
             "name": app.name,
             "runner": "docker-compose",
@@ -414,14 +408,13 @@ class CloudDeploymentManager:
             "public_sysinfo": app.public_sysinfo,
             "public_tcbinfo": app.public_tcbinfo,
             "key_provider_id": app.key_provider_id,
+            "allowed_envs": list(app.allowed_envs) if app.allowed_envs else [],
             "no_instance_id": app.no_instance_id,
             "secure_time": app.secure_time,
             "key_provider": app.key_provider,
             "storage_fs": app.storage_fs,
             "pre_launch_script": prelaunch_content
         }
-        app_compose["allowed_envs"] = list(app.allowed_envs) if app.allowed_envs else []
-        return self._apply_env_metadata_to_compose(app_compose, env_names=env_names)
 
     def _generate_sys_config(self, global_config: Dict[str, Any],
                              gcp_config: GcpConfig, app: App) -> Dict[str, Any]:
@@ -907,8 +900,8 @@ class CloudDeploymentManager:
                 logger.info(f"{app.env_file} is empty")
 
         # Generate app-compose.json
-        app_compose_content = self._generate_app_compose(app, env_names=env_names if env_names else None)
-        self._apply_env_metadata_to_compose(app_compose_content, envs=envs)
+        app_compose_content = self._generate_app_compose(app)
+        self._apply_env_metadata_to_compose(app_compose_content, envs=envs, env_names=env_names or None)
         app_compose_path = shared_dir / "app-compose.json"
         with open(app_compose_path, 'w') as f:
             json.dump(app_compose_content, f, indent=2)
@@ -1243,8 +1236,8 @@ class CloudDeploymentManager:
         logger.info(f"Generated {instance_info_path}")
 
         # Generate app-compose.json with env_names (from .env file)
-        app_compose_content = self._generate_app_compose(app, env_names=env_names if env_names else None)
-        self._apply_env_metadata_to_compose(app_compose_content, envs=envs)
+        app_compose_content = self._generate_app_compose(app)
+        self._apply_env_metadata_to_compose(app_compose_content, envs=envs, env_names=env_names or None)
         app_compose_path = shared_dir / "app-compose.json"
         with open(app_compose_path, 'w') as f:
             json.dump(app_compose_content, f, indent=2)
