@@ -1,3 +1,6 @@
+> [!IMPORTANT]
+> **This repository is archived.** Its functionality has been merged into upstream [dstack](https://github.com/Dstack-TEE/dstack). Please use dstack instead.
+
 # Yocto support for dstack guest OS
 
 This project implements Yocto layer and the overall build scripts for dstack Base OS image.
